@@ -1,8 +1,21 @@
 import { whatsabi } from "@shazow/whatsabi";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { blo } from "blo";
 import { createParser, parseAsInteger, useQueryState } from "nuqs";
 import * as React from "react";
-import { type Abi, decodeFunctionData, type Hex, hexToString, isHex, stringToHex } from "viem";
+import {
+  type Abi,
+  createPublicClient,
+  decodeFunctionData,
+  erc20Abi,
+  type Hex,
+  hexToString,
+  http,
+  isAddress,
+  isHex,
+  stringToHex,
+} from "viem";
+import { mainnet } from "viem/chains";
 import {
   useConnect,
   useConnection,
@@ -18,7 +31,11 @@ type JsonObject = Record<string, unknown>;
 
 const baseUsdcAddress = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 const sampleUsdcTransferData =
-  "0xa9059cbb00000000000000000000000008d25687829d6b85d9e0020b8c89e3ca24de20a8900000000000000000000000000000000000000000000000000000000000003e8";
+  "0xa9059cbb0000000000000000000000008d25687829d6b85d9e0020b8c89e3ca24de20a8900000000000000000000000000000000000000000000000000000000000003e8";
+const ensClient = createPublicClient({
+  chain: mainnet,
+  transport: http("https://evm.stupidtech.net/v1/1", { timeout: 5_000 }),
+});
 
 type AbiInput = {
   name?: string;
@@ -26,6 +43,47 @@ type AbiInput = {
   internalType?: string;
   components?: AbiInput[];
 };
+
+type SourcifyV2Contract = {
+  abi?: unknown;
+  compilation?: {
+    name?: unknown;
+  };
+  match?: unknown;
+};
+
+function createSourcifyV2AbiLoader(chainId: number) {
+  const loader = {
+    name: "SourcifyV2ABILoader",
+    async getContract(address: string) {
+      const url = new URL(`https://sourcify.dev/server/v2/contract/${chainId}/${address}`);
+      url.searchParams.set("fields", "abi,compilation");
+
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`Sourcify v2 ${response.status}: ${response.statusText}`);
+      }
+
+      const result = (await response.json()) as SourcifyV2Contract;
+      if (!Array.isArray(result.abi)) {
+        throw new Error("Sourcify v2 response did not include an ABI");
+      }
+
+      return {
+        abi: result.abi,
+        name: typeof result.compilation?.name === "string" ? result.compilation.name : null,
+        ok: result.match === "match" || result.match === "exact_match",
+        loader,
+        loaderResult: result,
+      };
+    },
+    async loadABI(address: string) {
+      return (await loader.getContract(address)).abi;
+    },
+  };
+
+  return loader;
+}
 
 function alertClass(destructive = false) {
   return destructive ? "text-red-700" : "text-gray-700";
@@ -133,6 +191,22 @@ function normalizeRedirectUrl(input: string) {
   }
 
   return out;
+}
+
+function collectAddresses(value: unknown, out: Set<string>) {
+  if (typeof value === "string") {
+    if (isAddress(value)) out.add(value.toLowerCase());
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) collectAddresses(item, out);
+    return;
+  }
+
+  if (isJsonObject(value)) {
+    for (const item of Object.values(value)) collectAddresses(item, out);
+  }
 }
 
 function isJsonObject(value: unknown): value is JsonObject {
@@ -243,6 +317,7 @@ type DecodedCall =
       };
       resolvedAddress?: string;
       contractName?: string;
+      tokenLabel?: string;
     }
   | {
       ok: false;
@@ -288,16 +363,6 @@ function extractCalldataTargets(method: string | null, rpcParams: unknown[] | nu
   }
 
   return [];
-}
-
-function shortenHex(value: string, start = 6, end = 4) {
-  if (!value.startsWith("0x")) return value;
-  if (value.length <= start + end + 2) return value;
-  return `${value.slice(0, start + 2)}…${value.slice(-end)}`;
-}
-
-function isAddressLike(value: string) {
-  return value.startsWith("0x") && value.length === 42;
 }
 
 function formatAbiType(input: AbiInput | undefined) {
@@ -525,10 +590,8 @@ function App() {
     queryFn: async () => {
       if (!publicClient) throw new Error("No public client");
 
-      // Prefer Sourcify for ABI loading (no Etherscan dependency).
-      const abiLoader = new whatsabi.loaders.SourcifyABILoader({
-        chainId: requestedChainId ?? 1,
-      });
+      // Prefer Sourcify v2 for ABI and contract-name metadata.
+      const abiLoader = createSourcifyV2AbiLoader(requestedChainId ?? 1);
 
       const signatureLookup = new whatsabi.loaders.OpenChainSignatureLookup();
 
@@ -539,6 +602,7 @@ function App() {
             const r = await whatsabi.autoload(to, {
               provider: publicClient,
               followProxies: true,
+              loadContractResult: true,
               abiLoader,
             });
 
@@ -587,6 +651,32 @@ function App() {
               // ignore
             }
 
+            let tokenLabel: string | undefined;
+            if (isAddress(to)) {
+              try {
+                const [symbol, name] = await Promise.all([
+                  publicClient.readContract({
+                    address: to,
+                    abi: erc20Abi,
+                    functionName: "symbol",
+                  }),
+                  publicClient.readContract({
+                    address: to,
+                    abi: erc20Abi,
+                    functionName: "name",
+                  }),
+                ]);
+                tokenLabel =
+                  typeof symbol === "string" && symbol.length > 0
+                    ? symbol
+                    : typeof name === "string" && name.length > 0
+                      ? name
+                      : undefined;
+              } catch {
+                // Not every decoded target is an ERC-20.
+              }
+            }
+
             return {
               ok: true,
               to,
@@ -601,9 +691,12 @@ function App() {
                   ? ((r as unknown as { address: string }).address as string)
                   : undefined,
               contractName:
-                typeof (r as unknown as { name?: unknown }).name === "string"
-                  ? ((r as unknown as { name: string }).name as string)
-                  : undefined,
+                typeof r.contractResult?.name === "string" && r.contractResult.name.length > 0
+                  ? r.contractResult.name
+                  : typeof (r as unknown as { name?: unknown }).name === "string"
+                    ? ((r as unknown as { name: string }).name as string)
+                    : undefined,
+              tokenLabel,
             };
           } catch (e) {
             const message = e instanceof Error ? e.message : String(e);
@@ -697,6 +790,32 @@ function App() {
     () => (decodedCalls?.filter((c) => c.ok) ?? []) as Array<Extract<DecodedCall, { ok: true }>>,
     [decodedCalls],
   );
+  const decodedAddresses = React.useMemo(() => {
+    const out = new Set<string>();
+    for (const call of decodedOkCalls) {
+      collectAddresses(call.to, out);
+      collectAddresses(call.decoded.args, out);
+    }
+    return [...out];
+  }, [decodedOkCalls]);
+  const { data: ensLabels = {} } = useQuery({
+    queryKey: ["ensLabels", decodedAddresses] as const,
+    queryFn: async () => {
+      const entries = await Promise.all(
+        decodedAddresses.map(async (address) => {
+          try {
+            const name = await ensClient.getEnsName({ address: address as `0x${string}` });
+            return name ? [address, name] : null;
+          } catch {
+            return null;
+          }
+        }),
+      );
+
+      return Object.fromEntries(entries.filter((entry) => entry != null)) as Record<string, string>;
+    },
+    enabled: decodedAddresses.length > 0,
+  });
   const hasSuccessfulDecoding = decodedOkCalls.length > 0;
   const [requestPreviewMode, setRequestPreviewMode] = React.useState<"decoded" | "raw">("raw");
   const hadDecodedRef = React.useRef(false);
@@ -717,88 +836,203 @@ function App() {
     }
   }, [decodedOkCalls.length, requestPreviewMode]);
 
-  function renderArgValue(value: unknown, input?: AbiInput) {
-    const type = input?.type;
-    if (type === "address" && typeof value === "string" && isAddressLike(value)) {
+  function renderPreviewModeControl() {
+    if (hasSuccessfulDecoding) {
       return (
-        <span className="inline-flex items-center gap-1">
-          <span className="font-mono break-all">{value}</span>
-          <button
-            type="button"
-            onClick={async () => {
-              await copyToClipboard(value);
-              setCopyStatus("Copied address");
-            }}
-            title="Copy address"
-          >
-            Copy
-          </button>
+        <span className="inline-flex gap-3">
+          <label className="inline-flex items-center gap-1">
+            <input
+              type="radio"
+              name="requestPreviewMode"
+              value="raw"
+              checked={requestPreviewMode === "raw"}
+              onChange={() => setRequestPreviewMode("raw")}
+            />
+            Raw
+          </label>
+          <label className="inline-flex items-center gap-1">
+            <input
+              type="radio"
+              name="requestPreviewMode"
+              value="decoded"
+              checked={requestPreviewMode === "decoded"}
+              onChange={() => setRequestPreviewMode("decoded")}
+            />
+            Decoded
+          </label>
         </span>
       );
     }
 
-    if (type === "address[]" && Array.isArray(value)) {
-      return (
-        <div className="space-y-1">
-          {value.map((addr) => {
-            if (typeof addr !== "string" || !isAddressLike(addr)) {
-              return <div key={safeJsonStringify(addr)}>{String(addr)}</div>;
-            }
-            return <div key={addr}>{renderArgValue(addr, { name: "", type: "address" })}</div>;
-          })}
-        </div>
-      );
+    if (calldataTargets.length > 0) {
+      return <span className="text-gray-500">{isDecoding ? "Decoding" : "Raw"}</span>;
     }
 
-    if (type === "tuple" && Array.isArray(value) && input?.components) {
-      return (
-        <div className="space-y-2">
-          {input.components.map((c, idx) => (
-            <div key={`${idx}:${c.name ?? ""}:${c.type ?? ""}`} className="p-2">
-              <div className="flex items-center justify-between gap-2">
-                <div className="text-gray-500">{c.name || `arg${idx}`}</div>
-                <span className="text-gray-500">{formatAbiType(c)}</span>
-              </div>
-              <div className="mt-1">{renderArgValue(value[idx], c)}</div>
-            </div>
-          ))}
-        </div>
-      );
-    }
+    return null;
+  }
 
-    const isTupleArrayType =
-      type === "tuple[]" || (typeof type === "string" && /^tuple\[\d+\]$/.test(type));
-    if (isTupleArrayType && Array.isArray(value) && input?.components) {
-      return (
-        <div className="space-y-2">
-          {value.map((item, i) => (
-            <div
-              key={`${i}:${typeof item === "string" ? item : typeof item === "bigint" ? item.toString() : ""}`}
-              className="space-y-1"
-            >
-              <div className="mb-1 text-gray-500">#{i}</div>
-              {renderArgValue(item, { ...input, type: "tuple" })}
-            </div>
-          ))}
-        </div>
-      );
-    }
+  function getKnownAddressLabel(address: string) {
+    const match = decodedOkCalls.find((call) => call.to.toLowerCase() === address.toLowerCase());
+    return match?.tokenLabel || ensLabels[address.toLowerCase()] || match?.contractName;
+  }
 
-    if (typeof value === "bigint") return value.toString();
-    if (typeof value === "string") {
-      if (isAddressLike(value)) {
-        return renderArgValue(value, { name: "", type: "address" });
+  function renderAddressValue(address: string, label?: string) {
+    return (
+      <span>
+        <img
+          src={blo(address as `0x${string}`, 16)}
+          alt=""
+          width={16}
+          height={16}
+          style={{ display: "inline-block", marginRight: "0.25rem", verticalAlign: "-0.15em" }}
+        />
+        <span>{label || address}</span>
+      </span>
+    );
+  }
+
+  function renderInlineDecodedArg(value: unknown, input: AbiInput | undefined, depth = 0) {
+    const type = formatAbiType(input);
+    const rawType = input?.type;
+    const indent = "  ".repeat(depth);
+    const nextIndent = "  ".repeat(depth + 1);
+
+    if (Array.isArray(value) && input?.components) {
+      const isTupleArray =
+        rawType === "tuple[]" || (typeof rawType === "string" && /^tuple\[\d+\]$/.test(rawType));
+
+      if (isTupleArray) {
+        return (
+          <>
+            {type} [
+            {value.map((item, idx) => (
+              <React.Fragment key={`${idx}:${safeJsonStringify(item)}`}>
+                {`\n${nextIndent}`}
+                {renderInlineDecodedArg(item, { ...input, type: "tuple" }, depth + 1)}
+                {idx < value.length - 1 ? "," : ""}
+              </React.Fragment>
+            ))}
+            {`\n${indent}`}]
+          </>
+        );
       }
-      return value.startsWith("0x") ? (
-        <span className="font-mono break-all">{value}</span>
-      ) : (
-        <span>{value}</span>
+
+      if (rawType === "tuple") {
+        return (
+          <>
+            {type} {"{"}
+            {input.components.map((component, idx) => (
+              <React.Fragment key={`${idx}:${component.name ?? ""}:${component.type ?? ""}`}>
+                {`\n${nextIndent}`}
+                {component.name ? `${component.name}: ` : ""}
+                {renderInlineDecodedArg(value[idx], component, depth + 1)}
+                {idx < input.components!.length - 1 ? "," : ""}
+              </React.Fragment>
+            ))}
+            {`\n${indent}`}
+            {"}"}
+          </>
+        );
+      }
+    }
+
+    if (Array.isArray(value)) {
+      return (
+        <>
+          {type} [
+          {value.map((item, idx) => (
+            <React.Fragment key={`${idx}:${safeJsonStringify(item)}`}>
+              {idx > 0 ? ", " : ""}
+              {String(item)}
+            </React.Fragment>
+          ))}
+          ]
+        </>
       );
     }
-    if (Array.isArray(value) || (value && typeof value === "object")) {
-      return <pre className="whitespace-pre-wrap break-words">{safeJsonStringify(value, 2)}</pre>;
+
+    const formatted = typeof value === "bigint" ? value.toString() : String(value);
+
+    return (
+      <>
+        {type}{" "}
+        {typeof value === "string" && isAddress(value)
+          ? renderAddressValue(value, getKnownAddressLabel(value))
+          : formatted}
+      </>
+    );
+  }
+
+  function renderDecodedParameters() {
+    if (method === "wallet_sendCalls") {
+      return (
+        <pre className="whitespace-pre-wrap break-words">
+          <div>{"["}</div>
+          <div>{"  {"}</div>
+          <div>{`    "calls": [`}</div>
+          {decodedOkCalls.map((call, i) => {
+            const args = Array.isArray(call.decoded.args) ? (call.decoded.args as unknown[]) : [];
+            const inputs = call.decoded.inputs ?? [];
+
+            return (
+              <React.Fragment key={`${call.to}:${call.data}:${i}`}>
+                <div>{"      {"}</div>
+                <div>
+                  {`        "to": "`}
+                  {renderAddressValue(call.to, call.tokenLabel || call.contractName)}
+                  {`",`}
+                </div>
+                <div>{`        "data": "${call.decoded.functionName}(`}</div>
+                {args.map((arg, idx) => (
+                  <div key={`${idx}:${safeJsonStringify(arg)}`}>
+                    {"          "}
+                    {renderInlineDecodedArg(arg, inputs[idx], 5)}
+                    {idx < args.length - 1 ? "," : ""}
+                  </div>
+                ))}
+                <div>{`        )"`}</div>
+                <div>{`      }${i < decodedOkCalls.length - 1 ? "," : ""}`}</div>
+              </React.Fragment>
+            );
+          })}
+          <div>{"    ]"}</div>
+          <div>{"  }"}</div>
+          <div>{"]"}</div>
+        </pre>
+      );
     }
-    return <span>{String(value)}</span>;
+
+    return (
+      <pre className="whitespace-pre-wrap break-words">
+        <div>[</div>
+        {decodedOkCalls.map((call, i) => {
+          const args = Array.isArray(call.decoded.args) ? (call.decoded.args as unknown[]) : [];
+          const inputs = call.decoded.inputs ?? [];
+
+          return (
+            <React.Fragment key={`${call.to}:${call.data}:${i}`}>
+              <div>{"  {"}</div>
+              <div>
+                {`    "to": "`}
+                {renderAddressValue(call.to, call.tokenLabel || call.contractName)}
+                {`",`}
+              </div>
+              <div>{`    "data": "${call.decoded.functionName}(`}</div>
+              {args.map((arg, idx) => (
+                <div key={`${idx}:${safeJsonStringify(arg)}`}>
+                  {"      "}
+                  {renderInlineDecodedArg(arg, inputs[idx], 3)}
+                  {idx < args.length - 1 ? "," : ""}
+                </div>
+              ))}
+              <div>{`    )"`}</div>
+              <div>{`  }${i < decodedOkCalls.length - 1 ? "," : ""}`}</div>
+            </React.Fragment>
+          );
+        })}
+        <div>]</div>
+      </pre>
+    );
   }
 
   function renderRequestJson() {
@@ -832,10 +1066,25 @@ function App() {
           <pre className="whitespace-pre-wrap break-words">{method ?? "(missing)"}</pre>
         </div>
         <div className="space-y-1">
-          <h3>Parameters</h3>
-          <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words">
-            {requestParamsPreview}
-          </pre>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3>Parameters</h3>
+            {renderPreviewModeControl()}
+          </div>
+          {requestPreviewMode === "decoded" && hasSuccessfulDecoding ? (
+            renderDecodedParameters()
+          ) : (
+            <>
+              <pre className="whitespace-pre-wrap break-words">{requestParamsPreview}</pre>
+              {calldataTargets.length > 0 &&
+                decodedCalls &&
+                !isDecoding &&
+                !hasSuccessfulDecoding && (
+                  <p className="text-gray-500">
+                    Decoding did not resolve a function for this calldata.
+                  </p>
+                )}
+            </>
+          )}
         </div>
       </div>
     );
@@ -956,128 +1205,7 @@ function App() {
                     </div>
                   )}
 
-                  {hasSuccessfulDecoding ? (
-                    <div>
-                      <div className="inline-flex gap-2">
-                        <button type="button" onClick={() => setRequestPreviewMode("decoded")}>
-                          Decoded
-                        </button>
-                        <button type="button" onClick={() => setRequestPreviewMode("raw")}>
-                          Raw
-                        </button>
-                      </div>
-
-                      {requestPreviewMode === "decoded" && (
-                        <div className="mt-3">
-                          <div className="space-y-2">
-                            {decodedOkCalls.map((call, i) => {
-                              const args = Array.isArray(call.decoded.args)
-                                ? (call.decoded.args as unknown[])
-                                : [];
-                              const inputs = call.decoded.inputs ?? [];
-                              const signature = `${call.decoded.functionName}(${inputs
-                                .map((inp, idx) =>
-                                  `${formatAbiType(inp)} ${inp.name ?? `arg${idx}`}`.trim(),
-                                )
-                                .join(", ")})`;
-
-                              return (
-                                <div key={`${call.to}:${call.data}:${i}`} className="space-y-2">
-                                  <div className="flex items-start justify-between gap-2">
-                                    <div className="min-w-0">
-                                      <div className="flex items-center gap-2">
-                                        <div className="min-w-0">
-                                          <div className="truncate">
-                                            {call.decoded.functionName}
-                                          </div>
-                                          <div className="truncate text-gray-500">
-                                            {call.contractName ? `${call.contractName} • ` : ""}
-                                            {shortenHex(call.to)}
-                                          </div>
-                                          {call.resolvedAddress &&
-                                            call.resolvedAddress !== call.to && (
-                                              <div className="truncate text-gray-500">
-                                                Implementation: {shortenHex(call.resolvedAddress)}
-                                              </div>
-                                            )}
-                                        </div>
-                                      </div>
-                                    </div>
-
-                                    <button
-                                      type="button"
-                                      onClick={async () => {
-                                        await copyToClipboard(call.to);
-                                        setCopyStatus("Copied address");
-                                      }}
-                                      title="Copy to address"
-                                    >
-                                      Copy
-                                    </button>
-                                  </div>
-
-                                  <div className="mt-2 text-gray-500">
-                                    <span className="font-mono">{signature}</span>
-                                  </div>
-
-                                  {args.length > 0 ? (
-                                    <div className="mt-3 space-y-2">
-                                      {args.map((arg, idx) => {
-                                        const inp = inputs[idx] ?? {};
-                                        const label = inp.name || `arg${idx}`;
-                                        const type = inp.type;
-                                        return (
-                                          <div
-                                            key={`${label}:${type ?? ""}:${safeJsonStringify(arg)}`}
-                                            className="space-y-1"
-                                          >
-                                            <div className="flex items-center justify-between gap-2">
-                                              <div className="text-gray-500">{label}</div>
-                                              {type && (
-                                                <span className="text-gray-500">
-                                                  {formatAbiType(inp)}
-                                                </span>
-                                              )}
-                                            </div>
-                                            <div className="mt-1">{renderArgValue(arg, inp)}</div>
-                                          </div>
-                                        );
-                                      })}
-                                    </div>
-                                  ) : (
-                                    <p className="mt-3 text-gray-500">No arguments.</p>
-                                  )}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      )}
-
-                      {requestPreviewMode === "raw" && (
-                        <div className="mt-3">{renderRequestJson()}</div>
-                      )}
-                    </div>
-                  ) : (
-                    <>
-                      <div>
-                        {calldataTargets.length > 0 && (
-                          <div className="mb-2 text-gray-500">
-                            {isDecoding ? "Decoding" : decodedCalls ? "Decoded" : "Pending"}
-                          </div>
-                        )}
-                        {renderRequestJson()}
-                      </div>
-
-                      {calldataTargets.length > 0 && decodedCalls && !isDecoding && (
-                        <>
-                          <p className="text-gray-500">
-                            Decoding did not resolve a function for this calldata.
-                          </p>
-                        </>
-                      )}
-                    </>
-                  )}
+                  {renderRequestJson()}
                 </>
               )}
 
