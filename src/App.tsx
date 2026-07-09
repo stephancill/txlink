@@ -1664,7 +1664,7 @@ function App() {
               <div className="text-gray-500">Connect to continue</div>
             </div>
             <div className="space-y-3">
-              <div className="flex flex-col gap-2">
+              <div className="flex max-w-xs flex-col gap-2">
                 {connectors.map((connector) => (
                   <button type="button" key={connector.uid} onClick={() => connect({ connector })}>
                     {connector.name}
