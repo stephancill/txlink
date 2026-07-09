@@ -1,9 +1,9 @@
 ---
-name: open-wallet
-description: Use https://tx.steer.fun to have a user execute a wallet action (send a transaction or sign a message) with their own wallet via a shareable URL. Use when an agent needs the user to approve/execute a JSON-RPC request (e.g. eth_sendTransaction, personal_sign, eth_signTypedData_v4, wallet_sendCalls) and return the result (tx hash/signature) back to the agent, optionally via redirect_url.
+name: txlink
+description: Use https://txlink.stupidtech.net to have a user execute a wallet action (send a transaction or sign a message) with their own wallet via a shareable URL. Use when an agent needs the user to approve/execute a JSON-RPC request (e.g. eth_sendTransaction, personal_sign, eth_signTypedData_v4, wallet_sendCalls) and return the result (tx hash/signature) back to the agent, optionally via redirect_url.
 ---
 
-# Open Wallet (tx.steer.fun)
+# txlink (txlink.stupidtech.net)
 
 Generate a link the user opens in their browser. The page shows the request, prompts them to connect their wallet, switches to the requested chainId, then executes the JSON-RPC request.
 
@@ -11,7 +11,7 @@ Generate a link the user opens in their browser. The page shows the request, pro
 
 Base URL:
 
-`https://tx.steer.fun/`
+`https://txlink.stupidtech.net/`
 
 Query params:
 
@@ -38,7 +38,7 @@ Notes:
 Use a JSON object:
 
 ```text
-https://tx.steer.fun/?method=personal_sign&chainId=1&params=%7B%22message%22%3A%22hello%22%7D
+https://txlink.stupidtech.net/?method=personal_sign&chainId=1&params=%7B%22message%22%3A%22hello%22%7D
 ```
 
 Expected result: signature string.
@@ -48,7 +48,7 @@ Expected result: signature string.
 Use a JSON object (the app will set `from` from the connected wallet if omitted):
 
 ```text
-https://tx.steer.fun/?method=eth_sendTransaction&chainId=1&params=%7B%22to%22%3A%220x4c5Ce72478D6Ce160cb31Dd25fe6a15DC269592D%22%2C%22data%22%3A%220xd09de08a%22%7D
+https://txlink.stupidtech.net/?method=eth_sendTransaction&chainId=1&params=%7B%22to%22%3A%220x4c5Ce72478D6Ce160cb31Dd25fe6a15DC269592D%22%2C%22data%22%3A%220xd09de08a%22%7D
 ```
 
 Expected result: tx hash.
@@ -58,7 +58,7 @@ Expected result: tx hash.
 Provide `{ address, typedData }`:
 
 ```text
-https://tx.steer.fun/?method=eth_signTypedData_v4&chainId=1&params=%7B%22address%22%3A%220xYourAddress%22%2C%22typedData%22%3A%7B%22types%22%3A%7B%7D%2C%22domain%22%3A%7B%7D%2C%22primaryType%22%3A%22%22%2C%22message%22%3A%7B%7D%7D%7D
+https://txlink.stupidtech.net/?method=eth_signTypedData_v4&chainId=1&params=%7B%22address%22%3A%220xYourAddress%22%2C%22typedData%22%3A%7B%22types%22%3A%7B%7D%2C%22domain%22%3A%7B%7D%2C%22primaryType%22%3A%22%22%2C%22message%22%3A%7B%7D%7D%7D
 ```
 
 Expected result: signature string.
@@ -68,7 +68,7 @@ Expected result: signature string.
 Provide `{ calls: [{ to, data }, ...] }` (and optionally `from`):
 
 ```text
-https://tx.steer.fun/?method=wallet_sendCalls&chainId=1&params=%7B%22calls%22%3A%5B%7B%22to%22%3A%220x0000000000000000000000000000000000000000%22%2C%22data%22%3A%220x%22%7D%5D%7D
+https://txlink.stupidtech.net/?method=wallet_sendCalls&chainId=1&params=%7B%22calls%22%3A%5B%7B%22to%22%3A%220x0000000000000000000000000000000000000000%22%2C%22data%22%3A%220x%22%7D%5D%7D
 ```
 
 Expected result: wallet-dependent (often an id or tx hash).
@@ -115,7 +115,7 @@ Example (Telegram share):
 Note: Telegram's share endpoint works best when you include both `url=` and `text=`. If you omit `url=`, it may redirect to telegram.org instead of showing the share UI.
 
 ```text
-https://tx.steer.fun/?method=personal_sign&chainId=1&params=%7B%22message%22%3A%22hello%22%7D&redirect_url=https%3A%2F%2Ft.me%2Fshare%2Furl%3Furl%3Dhttps%253A%252F%252Ftx.steer.fun%252F%26text%3DSignature%253A%2520%7B%7Bresult%7D%7D
+https://txlink.stupidtech.net/?method=personal_sign&chainId=1&params=%7B%22message%22%3A%22hello%22%7D&redirect_url=https%3A%2F%2Ft.me%2Fshare%2Furl%3Furl%3Dhttps%253A%252F%252Ftxlink.stupidtech.net%252F%26text%3DSignature%253A%2520%7B%7Bresult%7D%7D
 ```
 
 ## Safety Checks

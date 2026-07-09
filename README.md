@@ -1,10 +1,10 @@
-open-wallet is a tiny “open wallet request” page.
+txlink is a tiny page for sharing wallet requests as URLs.
 
-It reads a JSON-RPC request from the URL, shows it to the user, lets them connect their wallet, switches to the requested chain, and executes the request.
+It reads a JSON-RPC request from URL params, shows it to the user, lets them connect any wallet, switches to the requested chain, and executes the request.
 
 ## Deployed
 
-- `https://tx.steer.fun`
+- `https://txlink.stupidtech.net`
 
 ## URL Format
 
@@ -33,7 +33,7 @@ Placeholders:
 Example (Telegram share):
 
 ```text
-https://tx.steer.fun/?method=eth_sendTransaction&chainId=1&params=...&redirect_url=https%3A%2F%2Ft.me%2Fshare%2Furl%3Furl%3Dhttps%253A%252F%252Ftx.steer.fun%252F%26text%3DTx%2520hash%253A%2520%7B%7Bresult%7D%7D
+https://txlink.stupidtech.net/?method=eth_sendTransaction&chainId=1&params=...&redirect_url=https%3A%2F%2Ft.me%2Fshare%2Furl%3Furl%3Dhttps%253A%252F%252Ftxlink.stupidtech.net%252F%26text%3DTx%2520hash%253A%2520%7B%7Bresult%7D%7D
 ```
 
 Redirect query params appended (when redirect_url has no `{{...}}` placeholders):
@@ -49,13 +49,13 @@ Redirect query params appended (when redirect_url has no `{{...}}` placeholders)
 ### personal_sign
 
 ```text
-https://tx.steer.fun/?method=personal_sign&chainId=1&params=%7B%22message%22%3A%22hello%22%7D
+https://txlink.stupidtech.net/?method=personal_sign&chainId=1&params=%7B%22message%22%3A%22hello%22%7D
 ```
 
 ### eth_sendTransaction
 
 ```text
-https://tx.steer.fun/?method=eth_sendTransaction&chainId=1&params=%7B%22to%22%3A%220x4c5Ce72478D6Ce160cb31Dd25fe6a15DC269592D%22%2C%22data%22%3A%220xd09de08a%22%7D
+https://txlink.stupidtech.net/?method=eth_sendTransaction&chainId=1&params=%7B%22to%22%3A%220x4c5Ce72478D6Ce160cb31Dd25fe6a15DC269592D%22%2C%22data%22%3A%220xd09de08a%22%7D
 ```
 
 ## Local Dev
@@ -65,6 +65,36 @@ bun install
 bun run dev
 ```
 
+## Build
+
+```bash
+bunx oxfmt --write "src/App.tsx" "src/wagmi.ts" "vite.config.ts"
+bun run build
+```
+
+## Deploy
+
+Deployment uses Cloudflare Workers Static Assets via `wrangler.jsonc`.
+
+```bash
+source "$HOME/.nvm/nvm.sh" && nvm use 22
+bun run deploy
+```
+
+Expected custom domain route:
+
+```text
+txlink.stupidtech.net (custom domain)
+```
+
 ## Agent Skill
 
-See `skills/open-wallet/SKILL.md` for the “agent-facing” usage guide.
+See `skills/txlink/SKILL.md` for the source agent-facing usage guide.
+
+The same file is hosted at:
+
+```text
+https://txlink.stupidtech.net/SKILL.md
+```
+
+Keep `skills/txlink/SKILL.md` and `public/SKILL.md` in sync.
