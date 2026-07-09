@@ -1624,37 +1624,35 @@ function App() {
     <div className="min-h-screen text-gray-950">
       <main className="box-border flex min-h-screen max-w-2xl flex-col gap-5 p-4">
         <header>
-          <h1>txlink</h1>
+          <h1>
+            <a href="/">txlink</a>
+          </h1>
         </header>
 
         {!hasRequestQuery && (
           <section className="space-y-3">
-            <div className="space-y-1">
-              <h2>Samples</h2>
-              <div className="text-gray-500">Open a sample wallet request.</div>
+            <div>
+              Build links with <code>method</code>, <code>chainId</code>, and URL-encoded JSON in{" "}
+              <code>params</code>. See the <a href="/SKILL.md">txlink skill</a> for formats and
+              examples.
             </div>
-            <div className="flex flex-col gap-2 sm:flex-row">
+            <div className="space-y-1">
+              <h2>Examples</h2>
+            </div>
+            <div className="flex max-w-xl flex-wrap gap-2">
               <button type="button" onClick={() => window.location.assign(sampleSignPath)}>
                 Sign Hello world
               </button>
-            </div>
-            <div className="space-y-2">
-              <h3>Clear Signing</h3>
-              <div className="text-gray-500">
-                Real mainnet transaction shapes for preview. Only approve if you intend to execute.
-              </div>
-              <div className="flex flex-col gap-2">
-                {clearSigningSamplePaths.map((sample) => (
-                  <button
-                    type="button"
-                    key={sample.name}
-                    onClick={() => window.location.assign(sample.path)}
-                  >
-                    <span>{sample.name}</span>
-                    <span className="block text-gray-500">{sample.description}</span>
-                  </button>
-                ))}
-              </div>
+              {clearSigningSamplePaths.map((sample) => (
+                <button
+                  type="button"
+                  key={sample.name}
+                  title={sample.description}
+                  onClick={() => window.location.assign(sample.path)}
+                >
+                  {sample.name}
+                </button>
+              ))}
             </div>
           </section>
         )}
