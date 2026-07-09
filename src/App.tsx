@@ -1795,7 +1795,7 @@ function App() {
         )}
 
         <p style={{ marginTop: "auto" }}>
-          <a href="https://github.com/stephancill/open-wallet">github</a>
+          <a href="https://github.com/stephancill/txlink">github</a>
           {" - "}
           <a href="https://x.com/stephancill">twitter</a>
           {" - "}
