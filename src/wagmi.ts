@@ -7,7 +7,7 @@ const chainList = Object.values(chains) as unknown as readonly [Chain, ...Chain[
 
 const transports = chainList.reduce(
   (acc, chain) => {
-    acc[chain.id] = http();
+    acc[chain.id] = http(`https://evm.stupidtech.net/v1/${chain.id}`);
     return acc;
   },
   {} as Record<number, Transport>,

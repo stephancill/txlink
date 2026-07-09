@@ -1,3 +1,14 @@
+import {
+  type DisplayField,
+  type DisplayFieldGroup,
+  type DisplayModel,
+  type ExternalDataProvider,
+  type RegistryIndex,
+  type TrustedTokens,
+  fetchPrebuiltRegistryIndex,
+  format as formatClearSigning,
+  isFieldGroup,
+} from "@ethereum-sourcify/clear-signing";
 import { whatsabi } from "@shazow/whatsabi";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { blo } from "blo";
@@ -29,13 +40,97 @@ import { config } from "./wagmi";
 
 type JsonObject = Record<string, unknown>;
 
-const baseUsdcAddress = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
-const sampleUsdcTransferData =
-  "0xa9059cbb0000000000000000000000008d25687829d6b85d9e0020b8c89e3ca24de20a8900000000000000000000000000000000000000000000000000000000000003e8";
+type CalldataTarget = {
+  to: string;
+  data: Hex;
+  from?: string;
+  value?: bigint;
+};
+
 const ensClient = createPublicClient({
   chain: mainnet,
   transport: http("https://evm.stupidtech.net/v1/1", { timeout: 5_000 }),
 });
+
+const clearSigningSamples = [
+  {
+    name: "USDC Transfer",
+    description: "Send USDC stablecoin to another address",
+    params: {
+      to: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+      data: "0xa9059cbb000000000000000000000000d8da6bf26964af9d7eed9e03e53415d37aa9604500000000000000000000000000000000000000000000000000000000000003e8",
+    },
+  },
+  {
+    name: "Uniswap V3 Swap",
+    description: "Token swap on the Uniswap V3 SwapRouter02",
+    params: {
+      to: "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45",
+      data: "0x04e45aaf000000000000000000000000e73d53e3a982ab2750a0b76f9012e18b256cc243000000000000000000000000955d5c14c8d4944da1ea7836bd44d54a8ec35ba10000000000000000000000000000000000000000000000000000000000002710000000000000000000000000a22f1ac02b5fc04f2e355c30aebfd82a7465b2500000000000000000000000000000000000000000000000a2a15d09519be000000000000000000000000000000000000000000000000e47e1f99bfc71ff5996f80000000000000000000000000000000000000000000000000000000000000000",
+    },
+  },
+  {
+    name: "Lido stETH Submit",
+    description: "Stake ETH via Lido to receive stETH",
+    params: {
+      to: "0xae7ab96520de3a18e5e111b5eaab095312d7fe84",
+      data: "0xa1903eab0000000000000000000000006dc9657c2d90d57cadffb64239242d06e6103e43",
+      value: "0x63addbd635abd1a",
+    },
+  },
+  {
+    name: "Aave V3 Supply",
+    description: "Supply assets to the Aave V3 lending pool",
+    params: {
+      to: "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2",
+      data: "0x617ba037000000000000000000000000cd5fe23c85820f7b72d0926fc9b05b43e359b7ee0000000000000000000000000000000000000000000000002e6eb7bdd84f244b0000000000000000000000007221b104fba7701084759fd25faca19ac63008550000000000000000000000000000000000000000000000000000000000000000",
+    },
+  },
+  {
+    name: "WETH Deposit",
+    description: "Wrap ETH into WETH",
+    params: {
+      to: "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+      data: "0xd0e30db0",
+      value: "0x440aa47cbd000",
+    },
+  },
+  {
+    name: "1inch Swap",
+    description: "Token swap via 1inch Aggregation Router V6",
+    params: {
+      to: "0x111111125421ca6dc452d289314280a0f8842a65",
+      data: "0x07ed2379000000000000000000000000990636ecb3ff04d33d92e970d3d588bf5cd8d086000000000000000000000000e6264d3cc0948675e81e59d0fa2fd8e19cebf1f0000000000000000000000000eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee000000000000000000000000990636ecb3ff04d33d92e970d3d588bf5cd8d086000000000000000000000000d8da6bf26964af9d7eed9e03e53415d37aa9604500000000000000000000000000000000000018a6e32246c99c60ad85000000000000000000000000000000000000000000000000000000004ddc0a99119f757b00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000120000000000000000000000000000000000000000000000000000000000000018300000000000000000000000000000000016500014f0001050000c900004e00a0744c8c09e6264d3cc0948675e81e59d0fa2fd8e19cebf1f0cfd59c0f530db36eea8ccbfe744f01fe3556925e00000000000000000000000000000000000000327cb2734119d3b7a9000000000c20e6264d3cc0948675e81e59d0fa2fd8e19cebf1f077949cad6f504bbb59886423127d17687babccbf6ae4071118002dc6c077949cad6f504bbb59886423127d17687babccbf0000000000000000000000000000000000000000000000004d77e160fbaa3c49e6264d3cc0948675e81e59d0fa2fd8e19cebf1f04101c02aaa39b223fe8d0a0e5c4f27ead9083c756cc200042e1a7d4d000000000000000000000000000000000000000000000000000000000000000000a0f2fa6b66eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee0000000000000000000000000000000000000000000000004e4033d12794aead00000000000000000005f7744d630968c061111111125421ca6dc452d289314280a0f8842a6500000000000000000000000000000000000000000000000000000000006963f2b1",
+    },
+  },
+  {
+    name: "Aave V3 Borrow",
+    description: "Borrow assets from the Aave V3 lending pool",
+    params: {
+      to: "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2",
+      data: "0xa415bcad000000000000000000000000dac17f958d2ee523a2206206994597c13d831ec7000000000000000000000000000000000000000000000000000000006553f100000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000b964f15f863d00cd4819ca0e774f7af8c5200fe",
+    },
+  },
+  {
+    name: "Safe Factory",
+    description: "Deploy a new Safe multisig wallet via SafeProxyFactory",
+    params: {
+      to: "0x14f2982d601c9458f93bd70b218933a6f8165e7b",
+      data: "0x1688f0b9000000000000000000000000ff51a5898e281db6dfc7855790607438df2ca44b000000000000000000000000000000000000000000000000000000000000006000000000000000000000000000000000847924ad0e10568fa37f43eac0d2edfb0000000000000000000000000000000000000000000000000000000000000184b63e800d000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000016000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002000000000000000000000000bce5d9f94a897eac31cc0b039906ece65e263aac000000000000000000000000be0b407782a7599380fa726db315340126d62229000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+    },
+  },
+] satisfies Array<{
+  name: string;
+  description: string;
+  params: { to: string; data: string; value?: string };
+}>;
+
+let clearSigningRegistryIndexPromise: Promise<RegistryIndex> | null = null;
+
+function getClearSigningRegistryIndex() {
+  clearSigningRegistryIndexPromise ??= fetchPrebuiltRegistryIndex();
+  return clearSigningRegistryIndexPromise;
+}
 
 type AbiInput = {
   name?: string;
@@ -209,6 +304,27 @@ function collectAddresses(value: unknown, out: Set<string>) {
   }
 }
 
+function parseOptionalBigInt(value: unknown) {
+  if (typeof value === "bigint") return value;
+  if (typeof value === "number" && Number.isInteger(value) && value >= 0) return BigInt(value);
+  if (typeof value !== "string" || value.trim().length === 0) return undefined;
+
+  try {
+    return BigInt(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function hasClearSigningDisplay(model: DisplayModel) {
+  return (
+    !model.rawCalldataFallback &&
+    (model.interpolatedIntent != null ||
+      model.intent != null ||
+      (Array.isArray(model.fields) && model.fields.length > 0))
+  );
+}
+
 function isJsonObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -318,6 +434,7 @@ type DecodedCall =
       resolvedAddress?: string;
       contractName?: string;
       tokenLabel?: string;
+      clearSigning?: DisplayModel;
     }
   | {
       ok: false;
@@ -329,8 +446,7 @@ type DecodedCall =
     };
 
 function extractCalldataTargets(method: string | null, rpcParams: unknown[] | null) {
-  if (!method || !rpcParams || rpcParams.length === 0)
-    return [] as Array<{ to: string; data: Hex }>;
+  if (!method || !rpcParams || rpcParams.length === 0) return [] as CalldataTarget[];
 
   const first = rpcParams[0];
   if (!first || typeof first !== "object") return [];
@@ -340,7 +456,8 @@ function extractCalldataTargets(method: string | null, rpcParams: unknown[] | nu
     const to = tx.to;
     const data = (tx.data ?? tx.input) as unknown;
     if (typeof to === "string" && typeof data === "string" && isHex(data) && data !== "0x") {
-      return [{ to, data: data as Hex }];
+      const from = typeof tx.from === "string" ? tx.from : undefined;
+      return [{ to, data: data as Hex, from, value: parseOptionalBigInt(tx.value) }];
     }
   }
 
@@ -348,14 +465,14 @@ function extractCalldataTargets(method: string | null, rpcParams: unknown[] | nu
     const obj = first as Record<string, unknown>;
     const calls = obj.calls;
     if (Array.isArray(calls)) {
-      const out: Array<{ to: string; data: Hex }> = [];
+      const out: CalldataTarget[] = [];
       for (const call of calls) {
         if (!call || typeof call !== "object") continue;
         const c = call as Record<string, unknown>;
         const to = c.to;
         const data = (c.data ?? c.callData) as unknown;
         if (typeof to === "string" && typeof data === "string" && isHex(data) && data !== "0x") {
-          out.push({ to, data: data as Hex });
+          out.push({ to, data: data as Hex, value: parseOptionalBigInt(c.value) });
         }
       }
       return out;
@@ -378,6 +495,36 @@ function formatAbiType(input: AbiInput | undefined) {
   }
   if (typeof it === "string" && it.length > 0) return it;
   return typeof t === "string" ? t : "unknown";
+}
+
+function formatBase18Significant(value: bigint) {
+  if (value === 0n) return "0 x10¹⁸";
+
+  const sign = value < 0n ? "-" : "";
+  const raw = (value < 0n ? -value : value).toString();
+  const padded = raw.padStart(19, "0");
+  const whole = padded.slice(0, -18).replace(/^0+(?=\d)/, "");
+  const fraction = padded.slice(-18);
+  const decimal = `${whole}.${fraction}`;
+  const firstSignificant = decimal.search(/[1-9]/);
+
+  if (firstSignificant === -1) return "0 x10¹⁸";
+
+  let significantSeen = 0;
+  let coefficient = "";
+  for (const char of decimal) {
+    if (char === ".") {
+      coefficient += char;
+      continue;
+    }
+
+    if (significantSeen > 0 || char !== "0") significantSeen += 1;
+    coefficient += char;
+    if (significantSeen >= 6) break;
+  }
+
+  coefficient = coefficient.replace(/\.0*$/, "").replace(/(\.\d*?)0+$/, "$1");
+  return `${sign}${coefficient} x10¹⁸`;
 }
 
 function App() {
@@ -405,16 +552,16 @@ function App() {
       }),
     [],
   );
-  const sampleUsdcPath = React.useMemo(
+  const clearSigningSamplePaths = React.useMemo(
     () =>
-      buildRequestPath({
-        method: "eth_sendTransaction",
-        chainId: 8453,
-        params: {
-          to: baseUsdcAddress,
-          data: sampleUsdcTransferData,
-        },
-      }),
+      clearSigningSamples.map((sample) => ({
+        ...sample,
+        path: buildRequestPath({
+          method: "eth_sendTransaction",
+          chainId: 1,
+          params: sample.params,
+        }),
+      })),
     [],
   );
   const normalizedRedirectUrl = React.useMemo(() => {
@@ -439,8 +586,19 @@ function App() {
     () => extractCalldataTargets(method, rpcParams),
     [method, rpcParams],
   );
+  const calldataTargetsKey = React.useMemo(
+    () =>
+      calldataTargets.map((target) => ({
+        to: target.to,
+        data: target.data,
+        from: target.from,
+        value: target.value?.toString(),
+      })),
+    [calldataTargets],
+  );
 
   const [copyStatus, setCopyStatus] = React.useState<string | null>(null);
+  const [rawAddressDisplays, setRawAddressDisplays] = React.useState<Set<string>>(() => new Set());
 
   async function copyToClipboard(text: string) {
     try {
@@ -520,6 +678,10 @@ function App() {
   );
   const chainIdSupported =
     chainIdOk && supportedChainIds.includes(requestedChainId as SupportedChainId);
+  const requestedChain = React.useMemo(
+    () => config.chains.find((c) => c.id === requestedChainId),
+    [requestedChainId],
+  );
 
   const publicClient = usePublicClient(
     chainIdSupported ? { chainId: requestedChainId as SupportedChainId } : undefined,
@@ -586,7 +748,7 @@ function App() {
     !isSwitchingChain;
 
   const { data: decodedCalls = null, isLoading: isDecoding } = useQuery({
-    queryKey: ["decodedCalls", method, calldataTargets] as const,
+    queryKey: ["decodedCalls", method, requestedChainId, calldataTargetsKey] as const,
     queryFn: async () => {
       if (!publicClient) throw new Error("No public client");
 
@@ -594,10 +756,99 @@ function App() {
       const abiLoader = createSourcifyV2AbiLoader(requestedChainId ?? 1);
 
       const signatureLookup = new whatsabi.loaders.OpenChainSignatureLookup();
+      const clearSigningIndex = await getClearSigningRegistryIndex();
+      const resolveToken = async (_chainId: number, address: string) => {
+        if (!isAddress(address)) return null;
+
+        try {
+          const [symbol, name, decimals] = await Promise.all([
+            publicClient.readContract({
+              address,
+              abi: erc20Abi,
+              functionName: "symbol",
+            }),
+            publicClient.readContract({
+              address,
+              abi: erc20Abi,
+              functionName: "name",
+            }),
+            publicClient.readContract({
+              address,
+              abi: erc20Abi,
+              functionName: "decimals",
+            }),
+          ]);
+
+          if (
+            typeof symbol !== "string" ||
+            typeof name !== "string" ||
+            typeof decimals !== "number"
+          ) {
+            return null;
+          }
+
+          return { symbol, name, decimals };
+        } catch {
+          return null;
+        }
+      };
+      const externalDataProvider: ExternalDataProvider = {
+        resolveEnsName: async (address) => {
+          if (!isAddress(address)) return null;
+
+          try {
+            const name = await ensClient.getEnsName({ address });
+            return name ? { name, typeMatch: true } : null;
+          } catch {
+            return null;
+          }
+        },
+        resolveToken,
+        resolveChainInfo: async (chainId) => {
+          const chain = config.chains.find((c) => c.id === chainId);
+          return chain
+            ? {
+                name: chain.name,
+                nativeCurrency: chain.nativeCurrency,
+              }
+            : null;
+        },
+      };
 
       return Promise.all(
-        calldataTargets.map(async ({ to, data }): Promise<DecodedCall> => {
+        calldataTargets.map(async ({ to, data, from, value }): Promise<DecodedCall> => {
           const selector = data.slice(0, 10);
+          let clearSigning: DisplayModel | undefined;
+          let clearSigningTokenLabel: string | undefined;
+
+          try {
+            const token = await resolveToken(requestedChainId ?? 1, to);
+            clearSigningTokenLabel = token?.symbol || token?.name;
+            const trustedTokens: TrustedTokens | undefined = token
+              ? { [requestedChainId ?? 1]: { [to.toLowerCase()]: "erc20" } }
+              : undefined;
+            const model = await formatClearSigning(
+              {
+                chainId: requestedChainId ?? 1,
+                to,
+                data,
+                from,
+                value,
+              },
+              {
+                descriptorResolverOptions: {
+                  type: "github",
+                  index: clearSigningIndex,
+                  trustedTokens,
+                },
+                externalDataProvider,
+              },
+            );
+            if (hasClearSigningDisplay(model)) clearSigning = model;
+          } catch {
+            // Clear signing is an enhancement; keep the manual calldata decoder as fallback.
+          }
+
           try {
             const r = await whatsabi.autoload(to, {
               provider: publicClient,
@@ -607,6 +858,18 @@ function App() {
             });
 
             if (!r.abi) {
+              if (clearSigning) {
+                return {
+                  ok: true,
+                  to,
+                  data,
+                  decoded: { functionName: "", args: [], inputs: [] },
+                  contractName: clearSigning.metadata?.contractName,
+                  tokenLabel: clearSigningTokenLabel,
+                  clearSigning,
+                };
+              }
+
               const possibleSignatures = await signatureLookup.loadFunctions(selector);
               return {
                 ok: false,
@@ -697,8 +960,21 @@ function App() {
                     ? ((r as unknown as { name: string }).name as string)
                     : undefined,
               tokenLabel,
+              clearSigning,
             };
           } catch (e) {
+            if (clearSigning) {
+              return {
+                ok: true,
+                to,
+                data,
+                decoded: { functionName: "", args: [], inputs: [] },
+                contractName: clearSigning.metadata?.contractName,
+                tokenLabel: clearSigningTokenLabel,
+                clearSigning,
+              };
+            }
+
             const message = e instanceof Error ? e.message : String(e);
             let possibleSignatures: string[] | undefined;
             try {
@@ -876,9 +1152,19 @@ function App() {
     return match?.tokenLabel || ensLabels[address.toLowerCase()] || match?.contractName;
   }
 
+  function getAddressExplorerUrl(address: string) {
+    const explorerUrl = requestedChain?.blockExplorers?.default.url;
+    return explorerUrl ? `${explorerUrl.replace(/\/$/, "")}/address/${address}` : null;
+  }
+
   function renderAddressValue(address: string, label?: string) {
+    const explorerUrl = getAddressExplorerUrl(address);
+    const addressKey = address.toLowerCase();
+    const canToggleRawAddress = Boolean(label && label !== address);
+    const showRawAddress = rawAddressDisplays.has(addressKey) || !canToggleRawAddress;
+
     return (
-      <span>
+      <span className="inline-flex items-center gap-1">
         <img
           src={blo(address as `0x${string}`, 16)}
           alt=""
@@ -886,7 +1172,37 @@ function App() {
           height={16}
           style={{ display: "inline-block", marginRight: "0.25rem", verticalAlign: "-0.15em" }}
         />
-        <span>{label || address}</span>
+        <button
+          type="button"
+          className="cursor-pointer border-0 bg-transparent p-0 underline decoration-dotted underline-offset-2"
+          title={canToggleRawAddress ? `Show ${showRawAddress ? label : address}` : address}
+          onClick={() => {
+            if (!canToggleRawAddress) return;
+            setRawAddressDisplays((current) => {
+              const next = new Set(current);
+              if (next.has(addressKey)) {
+                next.delete(addressKey);
+              } else {
+                next.add(addressKey);
+              }
+              return next;
+            });
+          }}
+        >
+          {showRawAddress ? address : label}
+        </button>
+        {explorerUrl && (
+          <a
+            href={explorerUrl}
+            target="_blank"
+            rel="noreferrer"
+            title={`Open ${address} in block explorer`}
+            className="no-underline"
+            onClick={(event) => event.stopPropagation()}
+          >
+            ↗
+          </a>
+        )}
       </span>
     );
   }
@@ -951,7 +1267,13 @@ function App() {
       );
     }
 
-    const formatted = typeof value === "bigint" ? value.toString() : String(value);
+    const maybeUint256 = input?.type === "uint256" ? parseOptionalBigInt(value) : undefined;
+    const formatted =
+      maybeUint256 != null
+        ? formatBase18Significant(maybeUint256)
+        : typeof value === "bigint"
+          ? value.toString()
+          : String(value);
 
     return (
       <>
@@ -963,7 +1285,215 @@ function App() {
     );
   }
 
+  function renderClearSigningIntent(model: DisplayModel) {
+    if (model.interpolatedIntent) return model.interpolatedIntent;
+    if (typeof model.intent === "string") return model.intent;
+    if (model.intent && typeof model.intent === "object") {
+      return Object.entries(model.intent)
+        .map(([key, value]) => `${key}: ${value}`)
+        .join("\n");
+    }
+    return null;
+  }
+
+  function renderClearSigningFieldValue(field: DisplayField) {
+    const rawAddress = field.rawAddress;
+    const value = rawAddress && isAddress(rawAddress) ? rawAddress : field.value;
+
+    return isAddress(value) ? renderAddressValue(value, field.value) : value;
+  }
+
+  function renderClearSigningField(field: DisplayField | DisplayFieldGroup, key: string) {
+    if (isFieldGroup(field)) {
+      return (
+        <div key={key} className="space-y-2">
+          {field.label && <div className="text-gray-500">{field.label}</div>}
+          <div className="space-y-2 pl-4">
+            {field.fields.map((item, idx) => renderClearSigningField(item, `${key}:${idx}`))}
+          </div>
+          {field.warning && <div className="text-gray-500">{field.warning.message}</div>}
+        </div>
+      );
+    }
+
+    return (
+      <div key={key} className="space-y-1">
+        <div className="text-gray-500">{field.label}</div>
+        <div className="break-words">{renderClearSigningFieldValue(field)}</div>
+        {field.embeddedCalldata && (
+          <div className="pl-4">
+            {renderClearSigningModel(
+              field.embeddedCalldata.display,
+              field.embeddedCalldata.callee,
+              false,
+              field.embeddedCalldata.callee,
+            )}
+          </div>
+        )}
+        {field.warning && <div className="text-gray-500">{field.warning.message}</div>}
+      </div>
+    );
+  }
+
+  function renderClearSigningModel(
+    model: DisplayModel,
+    fallbackContractName?: string,
+    indented = false,
+    contractAddress?: string,
+    hideContract = false,
+  ) {
+    const contractName = model.metadata?.contractName || fallbackContractName || "Contract";
+    const contractUrl = model.metadata?.info?.url;
+    const intent = renderClearSigningIntent(model);
+
+    return (
+      <div className={`space-y-3${indented ? " pl-4" : ""}`}>
+        {!hideContract && (
+          <div className="space-y-1">
+            <div className="text-gray-500">Contract</div>
+            <div>
+              {contractAddress && isAddress(contractAddress) ? (
+                renderAddressValue(contractAddress, contractName)
+              ) : contractUrl ? (
+                <a href={contractUrl} target="_blank" rel="noreferrer">
+                  {contractName}
+                </a>
+              ) : (
+                <span>{contractName}</span>
+              )}
+            </div>
+          </div>
+        )}
+        {intent && (
+          <div className="space-y-1">
+            <div className="text-gray-500">Intent</div>
+            <div className="whitespace-pre-wrap break-words">{intent}</div>
+          </div>
+        )}
+        {model.fields && model.fields.length > 0 && (
+          <div className="space-y-2">
+            {model.fields.map((field, idx) => renderClearSigningField(field, String(idx)))}
+          </div>
+        )}
+        {model.warnings?.map((warning, idx) => (
+          <div key={`${warning.code}:${idx}`} className="text-gray-500">
+            {warning.message}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  function renderManualDecodedCall(
+    call: Extract<DecodedCall, { ok: true }>,
+    argIndentDepth: number,
+  ) {
+    const args = Array.isArray(call.decoded.args) ? (call.decoded.args as unknown[]) : [];
+    const inputs = call.decoded.inputs ?? [];
+
+    return (
+      <div className="space-y-2">
+        <div className="space-y-1">
+          <div className="text-gray-500">Function</div>
+          <div>{call.decoded.functionName}</div>
+        </div>
+        {args.map((arg, idx) => (
+          <div key={`${idx}:${safeJsonStringify(arg)}`} className="space-y-1">
+            <div className="text-gray-500">{inputs[idx]?.name || `Arg ${idx + 1}`}</div>
+            <div className="break-words">
+              {renderInlineDecodedArg(arg, inputs[idx], argIndentDepth)}
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  function renderDecodedCallListItem(call: DecodedCall, i: number) {
+    const to = call.to;
+    const contractLabel =
+      call.ok && call.clearSigning?.metadata?.contractName
+        ? call.clearSigning.metadata.contractName
+        : call.ok
+          ? call.contractName || call.tokenLabel || call.to
+          : to;
+
+    return (
+      <li key={`${to ?? "unknown"}:${call.data ?? ""}:${i}`} className="space-y-2">
+        <div>
+          {`Call ${i + 1}`}
+          {to && isAddress(to) && (
+            <>
+              {" to "}
+              {renderAddressValue(to, contractLabel)}
+            </>
+          )}
+        </div>
+        <div className="pl-4">
+          {call.ok && call.clearSigning ? (
+            renderClearSigningModel(
+              call.clearSigning,
+              call.contractName || call.tokenLabel || call.to,
+              false,
+              call.to,
+              true,
+            )
+          ) : call.ok ? (
+            renderManualDecodedCall(call, 1)
+          ) : (
+            <div className="space-y-1">
+              <div className="text-gray-500">Decoding</div>
+              <div>{call.error}</div>
+              {call.possibleSignatures && call.possibleSignatures.length > 0 && (
+                <div className="text-gray-500">
+                  Possible signatures: {call.possibleSignatures.join(", ")}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </li>
+    );
+  }
+
   function renderDecodedParameters() {
+    const clearSigningCalls = decodedOkCalls.filter((call) => call.clearSigning);
+
+    if (method === "wallet_sendCalls" && decodedCalls && clearSigningCalls.length > 0) {
+      if (decodedCalls.length > 1) {
+        return (
+          <ul className="list-disc space-y-5 pl-5">
+            {decodedCalls.map((call, i) => renderDecodedCallListItem(call, i))}
+          </ul>
+        );
+      }
+    }
+
+    if (clearSigningCalls.length > 0 && clearSigningCalls.length === decodedOkCalls.length) {
+      if (clearSigningCalls.length > 1) {
+        return (
+          <ul className="list-disc space-y-5 pl-5">
+            {clearSigningCalls.map((call, i) => renderDecodedCallListItem(call, i))}
+          </ul>
+        );
+      }
+
+      return (
+        <div className="space-y-5">
+          {clearSigningCalls.map((call, i) => (
+            <div key={`${call.to}:${call.data}:${i}`} className="space-y-2">
+              {renderClearSigningModel(
+                call.clearSigning!,
+                call.contractName || call.tokenLabel || call.to,
+                false,
+                call.to,
+              )}
+            </div>
+          ))}
+        </div>
+      );
+    }
+
     if (method === "wallet_sendCalls") {
       return (
         <pre className="whitespace-pre-wrap break-words">
@@ -1107,9 +1637,24 @@ function App() {
               <button type="button" onClick={() => window.location.assign(sampleSignPath)}>
                 Sign Hello world
               </button>
-              <button type="button" onClick={() => window.location.assign(sampleUsdcPath)}>
-                Send 0.001 USDC on Base
-              </button>
+            </div>
+            <div className="space-y-2">
+              <h3>Clear Signing</h3>
+              <div className="text-gray-500">
+                Real mainnet transaction shapes for preview. Only approve if you intend to execute.
+              </div>
+              <div className="flex flex-col gap-2">
+                {clearSigningSamplePaths.map((sample) => (
+                  <button
+                    type="button"
+                    key={sample.name}
+                    onClick={() => window.location.assign(sample.path)}
+                  >
+                    <span>{sample.name}</span>
+                    <span className="block text-gray-500">{sample.description}</span>
+                  </button>
+                ))}
+              </div>
             </div>
           </section>
         )}
