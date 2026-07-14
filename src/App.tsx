@@ -1080,7 +1080,7 @@ function App() {
     }
     if (!isConnected) return "Connect your wallet above to open this request.";
     if (needsChainSwitch) return `Switch to chainId ${requestedChainId} to continue.`;
-    if (requestError) return `Fix request: ${requestError}`;
+    if (requestError) return null;
     if (!walletClient) return "Waiting for wallet client.";
     return "Waiting until this request is ready.";
   }, [
@@ -1780,6 +1780,17 @@ function App() {
               <h2>Wallet</h2>
               <div className="text-gray-500">Connect to continue</div>
             </div>
+            {storedRequest && (
+              <div className="space-y-1">
+                <div className="text-gray-500">Expected address</div>
+                <div className="break-words">
+                  {renderAddressValue(
+                    storedRequest.address,
+                    getKnownAddressLabel(storedRequest.address),
+                  )}
+                </div>
+              </div>
+            )}
             <div className="space-y-3">
               <div className="flex max-w-xs flex-col gap-2">
                 {connectors.map((connector) => (
