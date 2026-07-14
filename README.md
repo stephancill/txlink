@@ -1,14 +1,49 @@
 txlink is a tiny page and API for sharing wallet requests with users.
 
-Agents create a stored JSON-RPC request, send the returned approval URL to the user, and poll the request status until the wallet result is stored.
+It supports two first-class flows:
 
-Direct URL requests with `method`, `chainId`, and `params` still work for manual use, but `redirect_url` is no longer supported.
+- Direct links with `method`, `chainId`, and URL-encoded `params`.
+- Stored requests created through the API, with a status URL agents can poll for the result.
 
 ## Deployed
 
 - `https://txlink.stupidtech.net`
 
+## Direct Links
+
+Direct links are the simplest way to ask a user to approve a wallet action. The page shows a copyable result after execution.
+
+Base URL:
+
+```text
+https://txlink.stupidtech.net/
+```
+
+Required query params:
+
+- `method`: JSON-RPC method (e.g. `eth_sendTransaction`, `personal_sign`, `eth_signTypedData_v4`, `wallet_sendCalls`)
+- `chainId`: integer chain id (the app will attempt to switch chains before executing)
+- `params`: URL-encoded JSON (either an object or an array)
+
+### personal_sign
+
+```text
+https://txlink.stupidtech.net/?method=personal_sign&chainId=1&params=%7B%22message%22%3A%22hello%22%7D
+```
+
+Expected result: signature string.
+
+### eth_sendTransaction
+
+```text
+https://txlink.stupidtech.net/?method=eth_sendTransaction&chainId=8453&params=%7B%22to%22%3A%220x8d25687829D6b85d9e0020B8c89e3Ca24dE20a89%22%2C%22value%22%3A%220x0%22%7D
+```
+
+Expected result: tx hash.
+
 ## Stored Request API
+
+Use the stored request API when an agent needs to retrieve the result automatically by polling.
 
 ### Create a request
 
@@ -88,29 +123,14 @@ Failed response:
 
 Records expire after 7 days.
 
-## Direct URL Format
+## Params Format
 
-Required query params:
-
-- `method`: JSON-RPC method (e.g. `eth_sendTransaction`, `personal_sign`, `eth_signTypedData_v4`, `wallet_sendCalls`)
-- `chainId`: integer chain id (the app will attempt to switch chains before executing)
-- `params`: URL-encoded JSON (either an object or an array)
-
-Direct URLs show a copyable result after execution. Use the stored request API when an agent needs to retrieve the result automatically.
-
-## Examples
-
-### personal_sign
-
-```text
-https://txlink.stupidtech.net/?method=personal_sign&chainId=1&params=%7B%22message%22%3A%22hello%22%7D
-```
-
-### eth_sendTransaction
-
-```text
-https://txlink.stupidtech.net/?method=eth_sendTransaction&chainId=1&params=%7B%22to%22%3A%220x4c5Ce72478D6Ce160cb31Dd25fe6a15DC269592D%22%2C%22data%22%3A%220xd09de08a%22%7D
-```
+- If `params` is a JSON array, it is treated as the exact JSON-RPC `params` array.
+- If `params` is a JSON object, the app maps common method shapes and fills `from` from the connected wallet when possible.
+- For `eth_sendTransaction`, use `{ to, data?, value? }`; `from` may be omitted.
+- For `personal_sign`, use `{ message }` or `{ data }`; `address` may be omitted.
+- For `eth_signTypedData_v4`, use `{ typedData }` or `{ data }`; `address` may be omitted.
+- For `wallet_sendCalls`, use `{ calls: [{ to, data, value? }, ...] }`; `from` may be omitted.
 
 ## Local Dev
 
@@ -128,7 +148,7 @@ bun run build
 
 ## D1 Setup
 
-Create the production database, replace the placeholder `database_id` in `wrangler.jsonc`, then apply migrations:
+Create the production database, set `database_id` in `wrangler.jsonc`, then apply migrations:
 
 ```bash
 wrangler d1 create txlink
@@ -160,4 +180,4 @@ The same file is hosted at:
 https://txlink.stupidtech.net/SKILL.md
 ```
 
-Keep `skills/txlink/SKILL.md` and `public/SKILL.md` in sync.
+`public/SKILL.md` is a symlink to `skills/txlink/SKILL.md` so the hosted copy stays in sync.
