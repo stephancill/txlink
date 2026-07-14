@@ -1097,19 +1097,29 @@ function App() {
     () => (decodedCalls?.filter((c) => c.ok) ?? []) as Array<Extract<DecodedCall, { ok: true }>>,
     [decodedCalls],
   );
+  const requestAddresses = React.useMemo(() => {
+    const out = new Set<string>();
+    collectAddresses(rawParams, out);
+    collectAddresses(rpcParams, out);
+    return [...out].sort();
+  }, [rawParams, rpcParams]);
   const decodedAddresses = React.useMemo(() => {
     const out = new Set<string>();
     for (const call of decodedOkCalls) {
       collectAddresses(call.to, out);
       collectAddresses(call.decoded.args, out);
     }
-    return [...out];
+    return [...out].sort();
   }, [decodedOkCalls]);
+  const displayAddresses = React.useMemo(
+    () => [...new Set([...requestAddresses, ...decodedAddresses])].sort(),
+    [decodedAddresses, requestAddresses],
+  );
   const { data: ensLabels = {} } = useQuery({
-    queryKey: ["ensLabels", decodedAddresses] as const,
+    queryKey: ["ensLabels", displayAddresses] as const,
     queryFn: async () => {
       const entries = await Promise.all(
-        decodedAddresses.map(async (address) => {
+        displayAddresses.map(async (address) => {
           try {
             const name = await ensClient.getEnsName({ address: address as `0x${string}` });
             return name ? [address, name] : null;
@@ -1121,7 +1131,7 @@ function App() {
 
       return Object.fromEntries(entries.filter((entry) => entry != null)) as Record<string, string>;
     },
-    enabled: decodedAddresses.length > 0,
+    enabled: displayAddresses.length > 0,
   });
   const hasSuccessfulDecoding = decodedOkCalls.length > 0;
   const [requestPreviewMode, setRequestPreviewMode] = React.useState<"decoded" | "raw">("raw");
@@ -1236,6 +1246,73 @@ function App() {
         )}
       </span>
     );
+  }
+
+  function renderRpcPrimitiveValue(value: unknown) {
+    if (typeof value === "string" && isAddress(value)) {
+      return renderAddressValue(value, getKnownAddressLabel(value));
+    }
+
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      return String(value);
+    }
+
+    if (value == null) return "null";
+
+    return safeJsonStringify(value, 2);
+  }
+
+  function renderTransactionParameters(tx: Record<string, unknown>) {
+    const entries = [
+      ["From", tx.from],
+      ["To", tx.to],
+      ["Value", tx.value ?? "0x0"],
+      ["Data", tx.data ?? tx.input],
+    ].filter((entry): entry is [string, unknown] => entry[1] !== undefined);
+
+    return (
+      <div className="space-y-3">
+        {entries.map(([label, value]) => (
+          <div key={label} className="space-y-1">
+            <div className="text-gray-500">{label}</div>
+            <div className="break-words">{renderRpcPrimitiveValue(value)}</div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  function renderStructuredParameters() {
+    const firstParam = rpcParams?.[0];
+    if (!isJsonObject(firstParam)) return null;
+
+    if (method === "eth_sendTransaction") {
+      return renderTransactionParameters(firstParam);
+    }
+
+    if (method === "wallet_sendCalls" && Array.isArray(firstParam.calls)) {
+      return (
+        <div className="space-y-4">
+          {typeof firstParam.from === "string" && (
+            <div className="space-y-1">
+              <div className="text-gray-500">From</div>
+              <div>{renderRpcPrimitiveValue(firstParam.from)}</div>
+            </div>
+          )}
+          <ol className="list-decimal space-y-4 pl-5">
+            {firstParam.calls.map((call, index) => (
+              <li key={`${index}:${safeJsonStringify(call)}`} className="space-y-2">
+                {isJsonObject(call)
+                  ? renderTransactionParameters(call)
+                  : renderRpcPrimitiveValue(call)}
+              </li>
+            ))}
+          </ol>
+        </div>
+      );
+    }
+
+    return null;
   }
 
   function renderInlineDecodedArg(value: unknown, input: AbiInput | undefined, depth = 0) {
@@ -1597,6 +1674,8 @@ function App() {
   }
 
   function renderRequestJson() {
+    const structuredParameters = renderStructuredParameters();
+
     if (personalSignPreview) {
       return (
         <div className="space-y-3">
@@ -1613,7 +1692,12 @@ function App() {
           {personalSignPreview.address && (
             <div className="space-y-1">
               <h3>Address</h3>
-              <pre className="whitespace-pre-wrap break-words">{personalSignPreview.address}</pre>
+              <div className="break-words">
+                {renderAddressValue(
+                  personalSignPreview.address,
+                  getKnownAddressLabel(personalSignPreview.address),
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -1633,6 +1717,8 @@ function App() {
           </div>
           {requestPreviewMode === "decoded" && hasSuccessfulDecoding ? (
             renderDecodedParameters()
+          ) : structuredParameters ? (
+            structuredParameters
           ) : (
             <>
               <pre className="whitespace-pre-wrap break-words">{requestParamsPreview}</pre>
