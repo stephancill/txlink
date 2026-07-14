@@ -1,11 +1,20 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "txlink",
+  "main": "src/worker.ts",
   "compatibility_date": "2026-05-25",
   "assets": {
+    "binding": "ASSETS",
     "directory": "./dist",
     "not_found_handling": "single-page-application"
   },
+  "d1_databases": [
+    {
+      "binding": "TXLINK_DB",
+      "database_name": "txlink",
+      "database_id": "677a7b38-863e-46c8-adb5-6ef20db226b3"
+    }
+  ],
   "routes": [
     {
       "pattern": "txlink.stupidtech.net",

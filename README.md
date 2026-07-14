@@ -1,12 +1,94 @@
-txlink is a tiny page for sharing wallet requests as URLs.
+txlink is a tiny page and API for sharing wallet requests with users.
 
-It reads a JSON-RPC request from URL params, shows it to the user, lets them connect any wallet, switches to the requested chain, and executes the request.
+Agents create a stored JSON-RPC request, send the returned approval URL to the user, and poll the request status until the wallet result is stored.
+
+Direct URL requests with `method`, `chainId`, and `params` still work for manual use, but `redirect_url` is no longer supported.
 
 ## Deployed
 
 - `https://txlink.stupidtech.net`
 
-## URL Format
+## Stored Request API
+
+### Create a request
+
+```http
+POST https://txlink.stupidtech.net/api/requests
+content-type: application/json
+```
+
+```json
+{
+  "address": "0x0000000000000000000000000000000000000000",
+  "method": "eth_sendTransaction",
+  "chainId": 1,
+  "params": {
+    "to": "0x4c5Ce72478D6Ce160cb31Dd25fe6a15DC269592D",
+    "data": "0xd09de08a"
+  }
+}
+```
+
+Response:
+
+```json
+{
+  "id": "tx_...",
+  "url": "https://txlink.stupidtech.net/?id=tx_...&token=...",
+  "statusUrl": "https://txlink.stupidtech.net/api/requests/tx_...",
+  "expiresAt": "..."
+}
+```
+
+Send `url` to the user. The `token` in that URL is private and lets the frontend write the wallet result back to the stored request.
+
+### Poll for the result
+
+```http
+GET https://txlink.stupidtech.net/api/requests/tx_...
+```
+
+Pending response:
+
+```json
+{
+  "id": "tx_...",
+  "address": "0x...",
+  "method": "eth_sendTransaction",
+  "chainId": 1,
+  "params": {},
+  "status": "pending",
+  "createdAt": "...",
+  "updatedAt": "...",
+  "completedAt": null,
+  "expiresAt": "..."
+}
+```
+
+Completed response:
+
+```json
+{
+  "id": "tx_...",
+  "status": "completed",
+  "resultType": "string",
+  "result": "0x..."
+}
+```
+
+Failed response:
+
+```json
+{
+  "id": "tx_...",
+  "status": "failed",
+  "error": "User rejected the request."
+}
+```
+
+Records expire after 7 days.
+
+## Direct URL Format
 
 Required query params:
 
@@ -14,35 +96,7 @@ Required query params:
 - `chainId`: integer chain id (the app will attempt to switch chains before executing)
 - `params`: URL-encoded JSON (either an object or an array)
 
-Optional:
-
-- `redirect_url`: redirect target after execution
-
-### redirect_url templating (no bridge)
-
-If `redirect_url` contains `{{...}}`, the app will treat it as a template and replace placeholders instead of appending `result=...` query params.
-
-Placeholders:
-
-- `{{result}}`: URL-encoded result string (or URL-encoded `JSON.stringify(result)`)
-- `{{result_raw}}`: unencoded result string (or `JSON.stringify(result)`)
-- `{{resultType}}`: `string` or `json`
-- `{{error}}`: URL-encoded error message
-- `{{error_raw}}`: unencoded error message
-
-Example (Telegram share):
-
-```text
-https://txlink.stupidtech.net/?method=eth_sendTransaction&chainId=1&params=...&redirect_url=https%3A%2F%2Ft.me%2Fshare%2Furl%3Furl%3Dhttps%253A%252F%252Ftxlink.stupidtech.net%252F%26text%3DTx%2520hash%253A%2520%7B%7Bresult%7D%7D
-```
-
-Redirect query params appended (when redirect_url has no `{{...}}` placeholders):
-
-- Success:
-  - `resultType=string` and `result=<value>` OR
-  - `resultType=json` and `result=<JSON.stringify(value)>`
-- Failure:
-  - `error=<message>`
+Direct URLs show a copyable result after execution. Use the stored request API when an agent needs to retrieve the result automatically.
 
 ## Examples
 
@@ -68,8 +122,17 @@ bun run dev
 ## Build
 
 ```bash
-bunx oxfmt --write "src/App.tsx" "src/wagmi.ts" "vite.config.ts"
+bunx oxfmt --write "src/App.tsx" "src/wagmi.ts" "src/worker.ts" "vite.config.ts"
 bun run build
+```
+
+## D1 Setup
+
+Create the production database, replace the placeholder `database_id` in `wrangler.jsonc`, then apply migrations:
+
+```bash
+wrangler d1 create txlink
+wrangler d1 migrations apply txlink --remote
 ```
 
 ## Deploy

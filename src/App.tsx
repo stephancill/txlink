@@ -40,6 +40,22 @@ import { config } from "./wagmi";
 
 type JsonObject = Record<string, unknown>;
 
+type StoredRequest = {
+  id: string;
+  address: string;
+  method: string;
+  chainId: number;
+  params: unknown;
+  status: "pending" | "completed" | "failed";
+  resultType?: "string" | "json" | null;
+  result?: unknown;
+  error?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+  expiresAt: string;
+};
+
 type CalldataTarget = {
   to: string;
   data: Hex;
@@ -267,26 +283,6 @@ const parseAsUnsafeJson = createParser({
   },
   serialize: (value: unknown) => JSON.stringify(value),
 });
-
-function normalizeRedirectUrl(input: string) {
-  const maybeDecodeOnce = (value: string) => {
-    if (!value.includes("%")) return value;
-    try {
-      return decodeURIComponent(value);
-    } catch {
-      return value;
-    }
-  };
-
-  let out = input;
-  for (let i = 0; i < 2; i += 1) {
-    const decoded = maybeDecodeOnce(out);
-    if (decoded === out) break;
-    out = decoded;
-  }
-
-  return out;
-}
 
 function collectAddresses(value: unknown, out: Set<string>) {
   if (typeof value === "string") {
@@ -535,14 +531,38 @@ function App() {
   const { data: walletClient } = useWalletClient();
   const { switchChainAsync } = useSwitchChain();
 
-  const [method] = useQueryState("method");
-  const [requestedChainId] = useQueryState("chainId", parseAsInteger);
-  const [rawParams] = useQueryState("params", parseAsUnsafeJson);
-  const [redirectUrl] = useQueryState("redirect_url");
+  const [storedRequestId] = useQueryState("id");
+  const [completionToken] = useQueryState("token");
+  const [queryMethod] = useQueryState("method");
+  const [queryChainId] = useQueryState("chainId", parseAsInteger);
+  const [queryParams] = useQueryState("params", parseAsUnsafeJson);
+  const storedRequestQuery = useQuery({
+    queryKey: ["storedRequest", storedRequestId] as const,
+    queryFn: async () => {
+      const response = await fetch(`/api/requests/${encodeURIComponent(storedRequestId ?? "")}`);
+      const body = (await response.json()) as unknown;
+      if (!response.ok) {
+        const message =
+          isJsonObject(body) && typeof body.error === "string" ? body.error : response.statusText;
+        throw new Error(message);
+      }
+      return body as StoredRequest;
+    },
+    enabled: !!storedRequestId,
+  });
+  const storedRequest = storedRequestQuery.data ?? null;
+  const method = storedRequest?.method ?? queryMethod;
+  const requestedChainId = storedRequest?.chainId ?? queryChainId;
+  const rawParams = storedRequest?.params ?? queryParams;
   const hasRequestQuery = React.useMemo(() => {
     const searchParams = new URLSearchParams(window.location.search);
-    return searchParams.has("method") || searchParams.has("chainId") || searchParams.has("params");
-  }, [method, requestedChainId, rawParams]);
+    return (
+      searchParams.has("id") ||
+      searchParams.has("method") ||
+      searchParams.has("chainId") ||
+      searchParams.has("params")
+    );
+  }, [storedRequestId, method, requestedChainId, rawParams]);
   const sampleSignPath = React.useMemo(
     () =>
       buildRequestPath({
@@ -564,12 +584,6 @@ function App() {
       })),
     [],
   );
-  const normalizedRedirectUrl = React.useMemo(() => {
-    if (!redirectUrl) return null;
-    const normalized = normalizeRedirectUrl(redirectUrl).trim();
-    return normalized.length > 0 ? normalized : null;
-  }, [redirectUrl]);
-
   const connectedAddress = connection.addresses?.[0];
   const built = React.useMemo(
     () => buildRpcParams(method ?? "", rawParams, connectedAddress),
@@ -616,58 +630,6 @@ function App() {
     }
   }
 
-  function buildRedirectTarget(input: string, payload: { result?: unknown; error?: string }) {
-    const stringifyResult = (value: unknown) => {
-      if (typeof value === "string") return { resultType: "string", result: value };
-      return { resultType: "json", result: safeJsonStringify(value) };
-    };
-
-    // Template mode: if redirect_url contains `{{...}}`, replace placeholders instead
-    // of appending `?result=...` style query params.
-    //
-    // Placeholders:
-    // - {{result}} / {{error}} are URL-encoded
-    // - {{result_raw}} / {{error_raw}} are unencoded
-    // - {{resultType}} is `string` or `json`
-    if (input.includes("{{")) {
-      const replaceAll = (source: string, search: string, replacement: string) =>
-        source.split(search).join(replacement);
-
-      const res = payload.result !== undefined ? stringifyResult(payload.result) : null;
-      const error = payload.error ?? "";
-      let out = input;
-      out = replaceAll(out, "{{resultType}}", res?.resultType ?? "");
-      out = replaceAll(out, "{{result_raw}}", res?.result ?? "");
-      out = replaceAll(out, "{{error_raw}}", error);
-      out = replaceAll(out, "{{result}}", res ? encodeURIComponent(res.result) : "");
-      out = replaceAll(out, "{{error}}", error ? encodeURIComponent(error) : "");
-
-      const url = new URL(out, window.location.origin);
-      if (url.protocol !== "http:" && url.protocol !== "https:") {
-        throw new Error(`Unsupported redirect_url protocol: ${url.protocol}`);
-      }
-      return url.toString();
-    }
-
-    // Default mode: append result/error as query params.
-    const base = new URL(input, window.location.origin);
-    if (base.protocol !== "http:" && base.protocol !== "https:") {
-      throw new Error(`Unsupported redirect_url protocol: ${base.protocol}`);
-    }
-
-    if (payload.error) {
-      base.searchParams.set("error", payload.error);
-    }
-
-    if (payload.result !== undefined) {
-      const res = stringifyResult(payload.result);
-      base.searchParams.set("resultType", res.resultType);
-      base.searchParams.set("result", res.result);
-    }
-
-    return base.toString();
-  }
-
   const chainIdOk =
     requestedChainId != null && Number.isInteger(requestedChainId) && requestedChainId > 0;
 
@@ -694,15 +656,32 @@ function App() {
     !builtOk &&
     built.error.includes("needs an address");
 
-  const requestError = !chainIdOk
-    ? "Missing or invalid `chainId` query param (expected integer chain id, e.g. 1, 11155111)."
-    : !chainIdSupported
-      ? `Unsupported chainId ${requestedChainId}. Supported: ${supportedChainIds.join(", ")}`
-      : builtOk
-        ? null
-        : isPersonalSignWaitingForWalletAddress
-          ? null
-          : built.error;
+  const storedRequestError = storedRequestQuery.error?.message ?? null;
+  const isStoredRequestLoading = Boolean(storedRequestId && storedRequestQuery.isLoading);
+  const connectedAddressMismatch =
+    storedRequest?.address && connectedAddress
+      ? storedRequest.address.toLowerCase() !== connectedAddress.toLowerCase()
+      : false;
+  const missingCompletionToken = Boolean(
+    storedRequest && storedRequest.status === "pending" && !completionToken,
+  );
+  const requestError = isStoredRequestLoading
+    ? null
+    : storedRequestError
+      ? `Could not load stored request: ${storedRequestError}`
+      : !chainIdOk
+        ? "Missing or invalid `chainId` query param (expected integer chain id, e.g. 1, 11155111)."
+        : !chainIdSupported
+          ? `Unsupported chainId ${requestedChainId}. Supported: ${supportedChainIds.join(", ")}`
+          : connectedAddressMismatch
+            ? `This request is for ${storedRequest?.address}, but you connected ${connectedAddress}.`
+            : missingCompletionToken
+              ? "Missing completion token for this stored request. Use the full approval URL returned by the API."
+              : builtOk
+                ? null
+                : isPersonalSignWaitingForWalletAddress
+                  ? null
+                  : built.error;
 
   const needsChainSwitch =
     isConnected &&
@@ -744,6 +723,11 @@ function App() {
     walletClient != null &&
     builtOk &&
     chainIdSupported &&
+    !isStoredRequestLoading &&
+    !storedRequestError &&
+    !connectedAddressMismatch &&
+    !missingCompletionToken &&
+    (!storedRequest || storedRequest.status === "pending") &&
     !needsChainSwitch &&
     !isSwitchingChain;
 
@@ -1005,51 +989,79 @@ function App() {
       }
 
       try {
-        return await walletClient.request({
+        const response = await walletClient.request({
           // wagmi/viem are typed for known methods; this app is intentionally generic.
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           method: method as any,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           params: built.params as any,
         });
+
+        if (storedRequestId && completionToken) {
+          const completeResponse = await fetch(
+            `/api/requests/${encodeURIComponent(storedRequestId)}/complete`,
+            {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                completionToken,
+                result: response,
+                resultType: typeof response === "string" ? "string" : "json",
+              }),
+            },
+          );
+          if (!completeResponse.ok) {
+            const body = (await completeResponse.json().catch(() => null)) as unknown;
+            const message =
+              isJsonObject(body) && typeof body.error === "string"
+                ? body.error
+                : completeResponse.statusText;
+            throw new Error(`Request completed, but result storage failed: ${message}`);
+          }
+          await storedRequestQuery.refetch();
+        }
+
+        return response;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
 
-        if (normalizedRedirectUrl) {
-          try {
-            const target = buildRedirectTarget(normalizedRedirectUrl, {
-              error: message,
-            });
-            window.location.assign(target);
-          } catch (redirectErr) {
-            const redirectMessage =
-              redirectErr instanceof Error ? redirectErr.message : String(redirectErr);
-            throw new Error(`${message} (redirect failed: ${redirectMessage})`);
+        if (storedRequestId && completionToken && !message.includes("result storage failed")) {
+          const completeResponse = await fetch(
+            `/api/requests/${encodeURIComponent(storedRequestId)}/complete`,
+            {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ completionToken, error: message }),
+            },
+          );
+          if (!completeResponse.ok) {
+            const body = (await completeResponse.json().catch(() => null)) as unknown;
+            const completeMessage =
+              isJsonObject(body) && typeof body.error === "string"
+                ? body.error
+                : completeResponse.statusText;
+            throw new Error(`${message} (result storage failed: ${completeMessage})`);
           }
+          await storedRequestQuery.refetch();
         }
 
         throw new Error(message);
       }
     },
-    onSuccess: (res) => {
-      if (normalizedRedirectUrl) {
-        const target = buildRedirectTarget(normalizedRedirectUrl, {
-          result: res,
-        });
-        window.location.assign(target);
-      }
-    },
   });
 
-  const result = executionMutation.data ?? null;
-  const executionError = executionMutation.error?.message ?? null;
+  const result =
+    executionMutation.data ?? (storedRequest?.status === "completed" ? storedRequest.result : null);
+  const executionError =
+    executionMutation.error?.message ??
+    (storedRequest?.status === "failed" ? storedRequest.error : null);
   const isExecuting = executionMutation.isPending;
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset state when inputs change
   React.useEffect(() => {
     executionMutation.reset();
     setCopyStatus(null);
-  }, [method, rawParams, requestedChainId, redirectUrl]);
+  }, [method, rawParams, requestedChainId, storedRequestId]);
 
   const requestParamsPreview = React.useMemo(() => {
     if (requestError) return null;
@@ -1061,6 +1073,25 @@ function App() {
     if (result == null) return "";
     return typeof result === "string" ? result : safeJsonStringify(result, 2);
   }, [executionError, result]);
+  const unavailableRequestMessage = React.useMemo(() => {
+    if (isStoredRequestLoading) return "Loading stored request.";
+    if (storedRequest && storedRequest.status !== "pending") {
+      return null;
+    }
+    if (!isConnected) return "Connect your wallet above to open this request.";
+    if (needsChainSwitch) return `Switch to chainId ${requestedChainId} to continue.`;
+    if (requestError) return `Fix request: ${requestError}`;
+    if (!walletClient) return "Waiting for wallet client.";
+    return "Waiting until this request is ready.";
+  }, [
+    isConnected,
+    isStoredRequestLoading,
+    needsChainSwitch,
+    requestError,
+    requestedChainId,
+    storedRequest,
+    walletClient,
+  ]);
 
   const decodedOkCalls = React.useMemo(
     () => (decodedCalls?.filter((c) => c.ok) ?? []) as Array<Extract<DecodedCall, { ok: true }>>,
@@ -1681,7 +1712,7 @@ function App() {
           </section>
         )}
 
-        {!normalizedRedirectUrl && (result != null || executionError != null) && (
+        {(result != null || executionError != null) && (
           <section className="space-y-3">
             <div className="space-y-1">
               <h2>Response</h2>
@@ -1719,7 +1750,9 @@ function App() {
               <div className="text-gray-500">Review the method and parameters before opening.</div>
             </div>
             <div className="space-y-3">
-              {requestError ? (
+              {isStoredRequestLoading ? (
+                <div className="text-gray-500">Loading stored request</div>
+              ) : requestError ? (
                 <>
                   <div className={alertClass(true)}>
                     <div>Invalid request</div>
@@ -1760,20 +1793,12 @@ function App() {
                 >
                   {isExecuting ? <>Opening</> : <>Open Request</>}
                 </button>
-                {normalizedRedirectUrl && (
-                  <span className="text-gray-500">Redirect after approval</span>
+                {storedRequest && storedRequest.status !== "pending" && (
+                  <span className="text-gray-500">Already {storedRequest.status}</span>
                 )}
               </div>
-              {!canOpenRequest && !isExecuting && (
-                <p className="text-gray-500">
-                  {!isConnected
-                    ? "Connect your wallet above to open this request."
-                    : needsChainSwitch
-                      ? `Switch to chainId ${requestedChainId} to continue.`
-                      : requestError
-                        ? `Fix request: ${requestError}`
-                        : "Waiting for wallet client…"}
-                </p>
+              {!canOpenRequest && !isExecuting && unavailableRequestMessage && (
+                <p className="text-gray-500">{unavailableRequestMessage}</p>
               )}
             </div>
           </section>
