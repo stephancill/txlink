@@ -366,8 +366,11 @@ function buildRpcParams(
   if (method === "wallet_sendCalls") {
     const calls = { ...rawParams };
     const from = (calls.from as string | undefined) ?? fallbackAddress;
-    // wallet_sendCalls requires `from` and `chainId`; fill them from the
-    // connected account / requested chain when not present.
+    // wallet_sendCalls requires `version`, `from`, and `chainId`; fill them when
+    // not present from defaults / connected account / requested chain.
+    if (calls.version == null) {
+      calls.version = "1.0";
+    }
     if (calls.chainId == null && fallbackChainId != null) {
       calls.chainId = fallbackChainId;
     }
