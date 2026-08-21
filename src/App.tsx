@@ -329,6 +329,7 @@ function buildRpcParams(
   method: string,
   rawParams: unknown,
   fallbackAddress: string | undefined,
+  fallbackChainId: number | undefined,
 ): { ok: true; params: unknown[] } | { ok: false; error: string } {
   if (!method) {
     return { ok: false, error: "Missing `method` query param." };
@@ -365,6 +366,11 @@ function buildRpcParams(
   if (method === "wallet_sendCalls") {
     const calls = { ...rawParams };
     const from = (calls.from as string | undefined) ?? fallbackAddress;
+    // wallet_sendCalls requires `from` and `chainId`; fill them from the
+    // connected account / requested chain when not present.
+    if (calls.chainId == null && fallbackChainId != null) {
+      calls.chainId = fallbackChainId;
+    }
     return { ok: true, params: [from ? { ...calls, from } : calls] };
   }
 
@@ -586,8 +592,8 @@ function App() {
   );
   const connectedAddress = connection.addresses?.[0];
   const built = React.useMemo(
-    () => buildRpcParams(method ?? "", rawParams, connectedAddress),
-    [method, rawParams, connectedAddress],
+    () => buildRpcParams(method ?? "", rawParams, connectedAddress, requestedChainId ?? undefined),
+    [method, rawParams, connectedAddress, requestedChainId],
   );
   const builtOk = built.ok;
   const rpcParams = builtOk ? built.params : null;
