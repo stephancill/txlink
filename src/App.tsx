@@ -1029,28 +1029,9 @@ function App() {
 
         return response;
       } catch (err) {
+        // Failed wallet responses are not persisted to the stored request; the
+        // request stays pending so a retry still works. Errors are only shown locally.
         const message = err instanceof Error ? err.message : String(err);
-
-        if (storedRequestId && completionToken && !message.includes("result storage failed")) {
-          const completeResponse = await fetch(
-            `/api/requests/${encodeURIComponent(storedRequestId)}/complete`,
-            {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ completionToken, error: message }),
-            },
-          );
-          if (!completeResponse.ok) {
-            const body = (await completeResponse.json().catch(() => null)) as unknown;
-            const completeMessage =
-              isJsonObject(body) && typeof body.error === "string"
-                ? body.error
-                : completeResponse.statusText;
-            throw new Error(`${message} (result storage failed: ${completeMessage})`);
-          }
-          await storedRequestQuery.refetch();
-        }
-
         throw new Error(message);
       }
     },
