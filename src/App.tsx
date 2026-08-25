@@ -1495,14 +1495,21 @@ function App() {
           <div className="text-gray-500">Function</div>
           <div>{call.decoded.functionName}</div>
         </div>
-        {args.map((arg, idx) => (
-          <div key={`${idx}:${safeJsonStringify(arg)}`} className="space-y-1">
-            <div className="text-gray-500">{inputs[idx]?.name || `Arg ${idx + 1}`}</div>
-            <div className="break-words">
-              {renderInlineDecodedArg(arg, inputs[idx], argIndentDepth)}
+        {args.length > 0 && (
+          <details>
+            <summary>{`Arguments (${args.length})`}</summary>
+            <div className="mt-2 space-y-2 pl-4">
+              {args.map((arg, idx) => (
+                <div key={`${idx}:${safeJsonStringify(arg)}`} className="space-y-1">
+                  <div className="text-gray-500">{inputs[idx]?.name || `Arg ${idx + 1}`}</div>
+                  <div className="break-words">
+                    {renderInlineDecodedArg(arg, inputs[idx], argIndentDepth)}
+                  </div>
+                </div>
+              ))}
             </div>
-          </div>
-        ))}
+          </details>
+        )}
       </div>
     );
   }
