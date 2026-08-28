@@ -718,7 +718,10 @@ function App() {
     if (!chainIdSupported) return;
     if (!connectedAddress) return;
     if (requestedChainId == null) return;
-    if (connection.chainId === requestedChainId) return;
+    if (connection.chainId === requestedChainId) {
+      lastAutoSwitchKeyRef.current = null;
+      return;
+    }
 
     const key = `${connectedAddress}:${requestedChainId}`;
     if (lastAutoSwitchKeyRef.current === key) return;
@@ -1791,7 +1794,18 @@ function App() {
             <div className="space-y-3">
               <div className="flex max-w-xs flex-col gap-2">
                 {connectors.map((connector) => (
-                  <button type="button" key={connector.uid} onClick={() => connect({ connector })}>
+                  <button
+                    type="button"
+                    key={connector.uid}
+                    onClick={() =>
+                      connect({
+                        connector,
+                        chainId: chainIdSupported
+                          ? (requestedChainId as SupportedChainId)
+                          : undefined,
+                      })
+                    }
+                  >
                     {connector.name}
                   </button>
                 ))}
