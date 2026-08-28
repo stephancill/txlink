@@ -50,12 +50,23 @@ const jsonValueSchema: z.ZodType<unknown> = z.lazy(() =>
     z.record(z.string(), jsonValueSchema),
   ]),
 );
-const createRequestSchema = z.object({
-  address: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
-  method: z.string().trim().min(1).max(128),
-  chainId: z.number().int().positive().safe(),
-  params: z.union([z.array(jsonValueSchema), z.record(z.string(), jsonValueSchema)]),
-});
+// Methods that may be bound to any account. Their stored request omits `address`
+// so execution is not tied to a single wallet account.
+const unboundRequestMethods = new Set(["eth_requestAccounts", "wallet_connect"]);
+const createRequestSchema = z
+  .object({
+    address: z
+      .string()
+      .regex(/^0x[a-fA-F0-9]{40}$/)
+      .optional(),
+    method: z.string().trim().min(1).max(128),
+    chainId: z.number().int().positive().safe(),
+    params: z.union([z.array(jsonValueSchema), z.record(z.string(), jsonValueSchema)]),
+  })
+  .refine((value) => value.address !== undefined || unboundRequestMethods.has(value.method), {
+    message: "`address` is required for this method.",
+    path: ["address"],
+  });
 const completeRequestSchema = z
   .object({
     completionToken: z.string().min(1),
@@ -112,7 +123,9 @@ function serializeRow(row: RequestRow, includeRequest = true) {
     id: row.id,
     ...(includeRequest
       ? {
-          address: row.address,
+          // Unbound requests have an empty sentinel in the database; omit the
+          // address so the public representation matches what was accepted.
+          ...(row.address ? { address: row.address } : {}),
           method: row.method,
           chainId: row.chain_id,
           params: JSON.parse(row.params_json) as unknown,
@@ -155,7 +168,7 @@ async function createStoredRequest(request: Request, env: Env) {
   )
     .bind(
       id,
-      body.address.toLowerCase(),
+      body.address ? body.address.toLowerCase() : "",
       body.method,
       body.chainId,
       JSON.stringify(body.params),

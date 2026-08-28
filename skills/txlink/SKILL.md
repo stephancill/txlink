@@ -88,6 +88,8 @@ Send `url` to the user. Keep `statusUrl` so you can poll for completion. The URL
 
 Stored requests verify that the connected wallet matches `address` before execution.
 
+`address` may be omitted for `eth_requestAccounts` and `wallet_connect`. Those unbound requests are not tied to a single account, so no `address` appears in the stored request and any connected wallet may open them.
+
 ## Poll For Completion
 
 Endpoint:

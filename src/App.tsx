@@ -42,7 +42,7 @@ type JsonObject = Record<string, unknown>;
 
 type StoredRequest = {
   id: string;
-  address: string;
+  address?: string;
   method: string;
   chainId: number;
   params: unknown;
@@ -1792,7 +1792,7 @@ function App() {
               <h2>Wallet</h2>
               <div className="text-gray-500">Connect to continue</div>
             </div>
-            {storedRequest && (
+            {storedRequest && storedRequest.address && (
               <div className="space-y-1">
                 <div className="text-gray-500">Expected address</div>
                 <div className="break-words">
