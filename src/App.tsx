@@ -1270,11 +1270,12 @@ function App() {
             <div className="text-gray-500">{label}</div>
             <div className="break-words">
               {label === "Data" && typeof value === "string" ? (
-                <details>
+                <details className="group">
                   <summary>
-                    <span className="line-clamp-3 break-all">{value}</span>
+                    <span className="line-clamp-3 break-all group-open:line-clamp-none">
+                      {value}
+                    </span>
                   </summary>
-                  <div className="mt-2 break-all pl-4">{value}</div>
                 </details>
               ) : (
                 renderRpcPrimitiveValue(value)
