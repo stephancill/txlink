@@ -1268,7 +1268,18 @@ function App() {
         {entries.map(([label, value]) => (
           <div key={label} className="space-y-1">
             <div className="text-gray-500">{label}</div>
-            <div className="break-words">{renderRpcPrimitiveValue(value)}</div>
+            <div className="break-words">
+              {label === "Data" && typeof value === "string" ? (
+                <details>
+                  <summary>
+                    <span className="line-clamp-3 break-all">{value}</span>
+                  </summary>
+                  <div className="mt-2 break-all pl-4">{value}</div>
+                </details>
+              ) : (
+                renderRpcPrimitiveValue(value)
+              )}
+            </div>
           </div>
         ))}
       </div>
