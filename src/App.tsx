@@ -1782,9 +1782,8 @@ function App() {
         {!hasRequestQuery && (
           <section className="space-y-3">
             <div>
-              Build links with <code>method</code>, <code>chainId</code>, and URL-encoded JSON in{" "}
-              <code>params</code>. See the <a href="/SKILL.md">txlink skill</a> for formats and
-              examples.
+              Encode ethereum transactions as shareable links. See the{" "}
+              <a href="/SKILL.md">txlink skill</a> for formats and examples.
             </div>
             <div className="space-y-1">
               <h2>Examples</h2>
@@ -1804,29 +1803,6 @@ function App() {
                 </button>
               ))}
             </div>
-          </section>
-        )}
-
-        {!hasRequestQuery && (
-          <section className="space-y-1">
-            <h2>Stats</h2>
-            {statsQuery.isLoading ? (
-              <div className="text-gray-500">Loading stats...</div>
-            ) : statsQuery.error ? (
-              <div className="text-gray-500">Stats unavailable</div>
-            ) : (
-              <div className="flex flex-wrap gap-x-4 gap-y-1 text-gray-500">
-                <span>initiated: {statsQuery.data?.total ?? 0}</span>
-                <span>
-                  completed: {statsQuery.data?.completed ?? 0} (
-                  {(
-                    ((statsQuery.data?.completed ?? 0) / (statsQuery.data?.total || 1)) *
-                    100
-                  ).toFixed(0)}
-                  %)
-                </span>
-              </div>
-            )}
           </section>
         )}
 
@@ -1992,6 +1968,27 @@ function App() {
           {" - "}
           <a href="https://txlink.stupidtech.net/SKILL.md">skill</a>
         </p>
+
+        {!hasRequestQuery && (
+          <p className="text-gray-500">
+            Remote Stats:{" "}
+            {statsQuery.isLoading ? (
+              "loading..."
+            ) : statsQuery.error ? (
+              "unavailable"
+            ) : (
+              <>
+                {statsQuery.data?.total ?? 0} initiated, {statsQuery.data?.completed ?? 0} completed
+                (
+                {(
+                  ((statsQuery.data?.completed ?? 0) / (statsQuery.data?.total || 1)) *
+                  100
+                ).toFixed(0)}
+                %)
+              </>
+            )}
+          </p>
+        )}
       </main>
     </div>
   );
