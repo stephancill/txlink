@@ -9,6 +9,7 @@ type D1Result<T = unknown> = {
 type D1PreparedStatement = {
   bind(...values: unknown[]): D1PreparedStatement;
   first<T = unknown>(): Promise<T | null>;
+  all<T = unknown>(): Promise<D1Result<T>>;
   run<T = unknown>(): Promise<D1Result<T>>;
 };
 
@@ -249,11 +250,31 @@ async function completeStoredRequest(id: string, request: Request, env: Env) {
   return json({ id, status, updatedAt: now, completedAt: now });
 }
 
+async function getRequestStats(env: Env) {
+  const result = await env.TXLINK_DB.prepare(
+    `SELECT status, COUNT(*) AS count FROM requests GROUP BY status`,
+  ).all<{ status: "pending" | "completed" | "failed"; count: number }>();
+
+  if (!result.success)
+    return json({ error: result.error ?? "Failed to read stats" }, { status: 500 });
+
+  const counts = { pending: 0, completed: 0, failed: 0 };
+  for (const row of result.results ?? []) {
+    if (row.status in counts) counts[row.status] = row.count;
+  }
+  const total = counts.pending + counts.completed + counts.failed;
+
+  return json({ total, ...counts });
+}
+
 async function routeApi(request: Request, env: Env) {
   if (request.method === "OPTIONS")
     return new Response(null, { status: 204, headers: corsHeaders });
 
   const url = new URL(request.url);
+  if (url.pathname === "/api/stats" && request.method === "GET") {
+    return getRequestStats(env);
+  }
   if (url.pathname === "/api/requests" && request.method === "POST") {
     return createStoredRequest(request, env);
   }

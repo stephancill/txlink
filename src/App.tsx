@@ -56,6 +56,13 @@ type StoredRequest = {
   expiresAt: string;
 };
 
+type Stats = {
+  total: number;
+  pending: number;
+  completed: number;
+  failed: number;
+};
+
 type CalldataTarget = {
   to: string;
   data: Hex;
@@ -572,6 +579,20 @@ function App() {
       searchParams.has("params")
     );
   }, [storedRequestId, method, requestedChainId, rawParams]);
+  const statsQuery = useQuery({
+    queryKey: ["stats"] as const,
+    queryFn: async () => {
+      const response = await fetch("/api/stats");
+      const body = (await response.json()) as unknown;
+      if (!response.ok) {
+        const message =
+          isJsonObject(body) && typeof body.error === "string" ? body.error : response.statusText;
+        throw new Error(message);
+      }
+      return body as Stats;
+    },
+    enabled: !hasRequestQuery,
+  });
   const sampleSignPath = React.useMemo(
     () =>
       buildRequestPath({
@@ -1783,6 +1804,29 @@ function App() {
                 </button>
               ))}
             </div>
+          </section>
+        )}
+
+        {!hasRequestQuery && (
+          <section className="space-y-1">
+            <h2>Stats</h2>
+            {statsQuery.isLoading ? (
+              <div className="text-gray-500">Loading stats...</div>
+            ) : statsQuery.error ? (
+              <div className="text-gray-500">Stats unavailable</div>
+            ) : (
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-gray-500">
+                <span>initiated: {statsQuery.data?.total ?? 0}</span>
+                <span>
+                  completed: {statsQuery.data?.completed ?? 0} (
+                  {(
+                    ((statsQuery.data?.completed ?? 0) / (statsQuery.data?.total || 1)) *
+                    100
+                  ).toFixed(0)}
+                  %)
+                </span>
+              </div>
+            )}
           </section>
         )}
 
