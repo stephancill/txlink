@@ -270,28 +270,15 @@ function hasWalletSignSentinel(value: unknown): boolean {
   return false;
 }
 
-// Deep-replace sentinel leaves: with a replacement account they are swapped in;
-// with `null` they are omitted. Returns a new structure (matching Coinbase Keys).
-function substituteSentinelLeaves(value: unknown, replacement: string | null): unknown {
-  if (typeof value === "string") {
-    return value.toLowerCase() === WALLET_SIGN_SUBSTITUTE_ACCOUNT
-      ? (replacement ?? undefined)
-      : value;
-  }
-  if (Array.isArray(value)) {
-    return value
-      .map((item) => substituteSentinelLeaves(item, replacement))
-      .filter((item) => item !== undefined);
-  }
-  if (isJsonObject(value)) {
-    const next: Record<string, unknown> = {};
-    for (const [key, item] of Object.entries(value)) {
-      const substituted = substituteSentinelLeaves(item, replacement);
-      if (substituted !== undefined) next[key] = substituted;
-    }
-    return next;
-  }
-  return value;
+// Deep-replace every sentinel occurrence anywhere in the request value by doing a
+// case-insensitive string substitution on the JSON round-trip (matching Coinbase Keys).
+function replaceSentinelLeaves(value: unknown, replacement: string): unknown {
+  const sentinelRe = new RegExp(
+    WALLET_SIGN_SUBSTITUTE_ACCOUNT.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+    "gi",
+  );
+  const text = JSON.stringify(value).replace(sentinelRe, replacement);
+  return JSON.parse(text) as unknown;
 }
 
 function parseWalletSignCall(params: unknown): WalletSignCall | null {
@@ -602,11 +589,11 @@ function buildRpcParams(
   }
 
   if (method === "wallet_sign" && isJsonObject(rawParams)) {
-    if (hasWalletSignSentinel(rawParams)) {
-      // 0xaaaa...aa sentinel: deeply replace any occurrence with the connected
-      // account; when none is connected, drop the sentinel leaves so the request
-      // stays unbound (wallet picks the account).
-      return { ok: true, params: [substituteSentinelLeaves(rawParams, fallbackAddress ?? null)] };
+    if (fallbackAddress && hasWalletSignSentinel(rawParams)) {
+      // 0xaaaa…aa sentinel: substitute the connected account's address anywhere
+      // it appears. Without a connected account the request is left untouched
+      // (execution is gated on connection, so the wallet always gets a real one).
+      return { ok: true, params: [replaceSentinelLeaves(rawParams, fallbackAddress)] };
     }
     return { ok: true, params: [rawParams] };
   }
