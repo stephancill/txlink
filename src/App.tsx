@@ -254,6 +254,14 @@ type WalletSignCall = {
   data: unknown;
 };
 
+// Address sentinel that signals "substitute the connected account's address"
+// for a wallet_sign request that omits a concrete account up front.
+const WALLET_SIGN_SUBSTITUTE_ACCOUNT = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+function isWalletSignSubstituteAddress(address: string | undefined) {
+  return typeof address === "string" && address.toLowerCase() === WALLET_SIGN_SUBSTITUTE_ACCOUNT;
+}
+
 function parseWalletSignCall(params: unknown): WalletSignCall | null {
   const call = Array.isArray(params) ? params[0] : params;
   if (!isJsonObject(call)) return null;
@@ -284,7 +292,9 @@ function buildWalletSignFallback(
   connectedAddress: string | undefined,
 ): { method: "personal_sign" | "eth_signTypedData_v4"; params: unknown[] } | null {
   if (call.type !== "0x45" && call.type !== "0x01") return null;
-  const address = call.address ?? connectedAddress;
+  const address = isWalletSignSubstituteAddress(call.address)
+    ? connectedAddress
+    : (call.address ?? connectedAddress);
   if (!address) return null;
 
   if (call.type === "0x45") {
@@ -557,6 +567,17 @@ function buildRpcParams(
 
     const typedDataJson = typeof typedData === "string" ? typedData : JSON.stringify(typedData);
     return { ok: true, params: [address, typedDataJson] };
+  }
+
+  if (method === "wallet_sign" && isJsonObject(rawParams)) {
+    const next = { ...rawParams };
+    if (isWalletSignSubstituteAddress(next.address as string | undefined)) {
+      // 0xaaaa...aaa sentinel: use the connected account when available, else
+      // leave wallet_sign unbound so the wallet picks the account.
+      if (fallbackAddress) next.address = fallbackAddress;
+      else delete next.address;
+    }
+    return { ok: true, params: [next] };
   }
 
   // Generic fallback: treat the provided params object as the first param.
