@@ -3,8 +3,14 @@
 @import "tailwindcss/theme.css" layer(theme);
 @import "tailwindcss/utilities.css" layer(utilities);
 
+/* Stupid shared styling: system-ui type, a single centered 46rem column,
+   light-gray code blocks, and native browser primitives. */
 body {
-  margin: 0;
+  font-family: system-ui, sans-serif;
+  max-width: 46rem;
+  margin: 2rem auto;
+  padding: 0 1rem;
+  line-height: 1.6;
 }
 
 html,
@@ -13,9 +19,26 @@ body,
   min-height: 100%;
 }
 
+code,
+pre {
+  background: #f4f4f4;
+  padding: 0.15rem 0.35rem;
+  border-radius: 4px;
+}
+
+pre {
+  padding: 1rem;
+  overflow: auto;
+}
+
+input,
 button,
 textarea {
   font: inherit;
+}
+
+button {
+  padding: 0.25rem 0.75rem;
 }
 
 h1,

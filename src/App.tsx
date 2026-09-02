@@ -778,6 +778,52 @@ function formatRelativeTime(dateString: string): string | null {
   return rtf.format(value, unit);
 }
 
+// Render long calldata clamped to 3 lines, but only when it actually overflows:
+// short data is shown in full with no expand chevron.
+function ExpandableCalldata({ value }: { value: string }) {
+  const spanRef = React.useRef<HTMLSpanElement>(null);
+  const [overflows, setOverflows] = React.useState(false);
+
+  React.useLayoutEffect(() => {
+    const el = spanRef.current;
+    if (!el) return;
+    setOverflows(el.scrollHeight > el.clientHeight + 1);
+  }, [value]);
+
+  const clamped = (
+    <span ref={spanRef} className="line-clamp-3 break-all group-open:line-clamp-none">
+      {value}
+    </span>
+  );
+
+  if (!overflows) return clamped;
+
+  return (
+    <details className="group">
+      <summary>{clamped}</summary>
+    </details>
+  );
+}
+
+// Bordered, divided "parameter table" styling mirroring the stupid-wallet-2
+// popup: a rounded container with 1px row separators and muted, small labels.
+function SectionList({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="divide-y divide-gray-200 overflow-hidden border border-gray-200">
+      {children}
+    </div>
+  );
+}
+
+function SectionRow({ label, children }: { label?: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-px px-3 py-2">
+      {label && <div className="text-gray-500 text-xs uppercase tracking-wide">{label}</div>}
+      <div className="break-words text-sm">{children}</div>
+    </div>
+  );
+}
+
 function App() {
   const connection = useConnection();
   const { connect, error } = useConnect();
@@ -1644,26 +1690,17 @@ function App() {
     ].filter((entry): entry is [string, unknown] => entry[1] !== undefined);
 
     return (
-      <div className="space-y-3">
+      <SectionList>
         {entries.map(([label, value]) => (
-          <div key={label} className="space-y-1">
-            <div className="text-gray-500">{label}</div>
-            <div className="break-words">
-              {label === "Data" && typeof value === "string" ? (
-                <details className="group">
-                  <summary>
-                    <span className="line-clamp-3 break-all group-open:line-clamp-none">
-                      {value}
-                    </span>
-                  </summary>
-                </details>
-              ) : (
-                renderRpcPrimitiveValue(value)
-              )}
-            </div>
-          </div>
+          <SectionRow key={label} label={label}>
+            {label === "Data" && typeof value === "string" ? (
+              <ExpandableCalldata value={value} />
+            ) : (
+              renderRpcPrimitiveValue(value)
+            )}
+          </SectionRow>
         ))}
-      </div>
+      </SectionList>
     );
   }
 
@@ -1679,10 +1716,9 @@ function App() {
       return (
         <div className="space-y-4">
           {typeof firstParam.from === "string" && (
-            <div className="space-y-1">
-              <div className="text-gray-500">From</div>
-              <div>{renderRpcPrimitiveValue(firstParam.from)}</div>
-            </div>
+            <SectionList>
+              <SectionRow label="From">{renderRpcPrimitiveValue(firstParam.from)}</SectionRow>
+            </SectionList>
           )}
           <ol className="list-decimal space-y-4 pl-5">
             {firstParam.calls.map((call, index) => (
@@ -1817,22 +1853,23 @@ function App() {
   function renderClearSigningField(field: DisplayField | DisplayFieldGroup, key: string) {
     if (isFieldGroup(field)) {
       return (
-        <div key={key} className="space-y-2">
-          {field.label && <div className="text-gray-500">{field.label}</div>}
-          <div className="space-y-2 pl-4">
+        <div key={key} className="space-y-2 px-3 py-2">
+          {field.label && (
+            <div className="text-gray-500 text-xs uppercase tracking-wide">{field.label}</div>
+          )}
+          <SectionList>
             {field.fields.map((item, idx) => renderClearSigningField(item, `${key}:${idx}`))}
-          </div>
+          </SectionList>
           {renderFieldWarning(field)}
         </div>
       );
     }
 
     return (
-      <div key={key} className="space-y-1">
-        <div className="text-gray-500">{field.label}</div>
-        <div className="break-words">{renderClearSigningFieldValue(field)}</div>
+      <SectionRow key={key} label={field.label}>
+        {renderClearSigningFieldValue(field)}
         {field.embeddedCalldata && (
-          <div className="pl-4">
+          <div className="mt-2">
             {renderClearSigningModel(
               field.embeddedCalldata.display,
               field.embeddedCalldata.callee,
@@ -1842,7 +1879,7 @@ function App() {
           </div>
         )}
         {renderFieldWarning(field)}
-      </div>
+      </SectionRow>
     );
   }
 
@@ -1859,10 +1896,9 @@ function App() {
 
     return (
       <div className={`space-y-3${indented ? " pl-4" : ""}`}>
-        {!hideContract && (
-          <div className="space-y-1">
-            <div className="text-gray-500">Contract</div>
-            <div>
+        <SectionList>
+          {!hideContract && (
+            <SectionRow label="Contract">
               {contractAddress && isAddress(contractAddress) ? (
                 renderAddressValue(contractAddress, contractName)
               ) : contractUrl ? (
@@ -1872,20 +1908,17 @@ function App() {
               ) : (
                 <span>{contractName}</span>
               )}
-            </div>
-          </div>
-        )}
-        {intent && (
-          <div className="space-y-1">
-            <div className="text-gray-500">Intent</div>
-            <div className="whitespace-pre-wrap break-words">{intent}</div>
-          </div>
-        )}
-        {model.fields && model.fields.length > 0 && (
-          <div className="space-y-2">
-            {model.fields.map((field, idx) => renderClearSigningField(field, String(idx)))}
-          </div>
-        )}
+            </SectionRow>
+          )}
+          {intent && (
+            <SectionRow label="Intent">
+              <div className="whitespace-pre-wrap break-words">{intent}</div>
+            </SectionRow>
+          )}
+          {model.fields &&
+            model.fields.length > 0 &&
+            model.fields.map((field, idx) => renderClearSigningField(field, String(idx)))}
+        </SectionList>
         {model.warnings
           ?.filter((warning) => warning.code !== "UNKNOWN_ADDRESS")
           .map((warning, idx) => (
@@ -1906,25 +1939,25 @@ function App() {
 
     return (
       <div className="space-y-2">
-        <div className="space-y-1">
-          <div className="text-gray-500">Function</div>
-          <div>{call.decoded.functionName}</div>
-        </div>
-        {args.length > 0 && (
-          <details>
-            <summary>{`Arguments (${args.length})`}</summary>
-            <div className="mt-2 space-y-2 pl-4">
-              {args.map((arg, idx) => (
-                <div key={`${idx}:${safeJsonStringify(arg)}`} className="space-y-1">
-                  <div className="text-gray-500">{inputs[idx]?.name || `Arg ${idx + 1}`}</div>
-                  <div className="break-words">
-                    {renderInlineDecodedArg(arg, inputs[idx], argIndentDepth)}
+        <SectionList>
+          <SectionRow label="Function">{call.decoded.functionName}</SectionRow>
+          {args.length > 0 && (
+            <SectionRow label={`Arguments (${args.length})`}>
+              <div className="space-y-2">
+                {args.map((arg, idx) => (
+                  <div key={`${idx}:${safeJsonStringify(arg)}`} className="space-y-px">
+                    <div className="text-gray-500 text-xs">
+                      {inputs[idx]?.name || `Arg ${idx + 1}`}
+                    </div>
+                    <div className="break-words">
+                      {renderInlineDecodedArg(arg, inputs[idx], argIndentDepth)}
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
-          </details>
-        )}
+                ))}
+              </div>
+            </SectionRow>
+          )}
+        </SectionList>
       </div>
     );
   }
@@ -1961,15 +1994,16 @@ function App() {
           ) : call.ok ? (
             renderManualDecodedCall(call, 1)
           ) : (
-            <div className="space-y-1">
-              <div className="text-gray-500">Decoding</div>
-              <div>{call.error}</div>
-              {call.possibleSignatures && call.possibleSignatures.length > 0 && (
-                <div className="text-gray-500">
-                  Possible signatures: {call.possibleSignatures.join(", ")}
-                </div>
-              )}
-            </div>
+            <SectionList>
+              <SectionRow label="Decoding">
+                <div>{call.error}</div>
+                {call.possibleSignatures && call.possibleSignatures.length > 0 && (
+                  <div className="text-gray-500">
+                    Possible signatures: {call.possibleSignatures.join(", ")}
+                  </div>
+                )}
+              </SectionRow>
+            </SectionList>
           )}
         </div>
       </li>
@@ -2108,68 +2142,58 @@ function App() {
 
     if (personalSignPreview) {
       return (
-        <div className="space-y-3">
-          <div className="space-y-1">
-            <h3>Method</h3>
-            <pre className="whitespace-pre-wrap break-words">personal_sign</pre>
-          </div>
-          <div className="space-y-1">
-            <h3>Message</h3>
+        <SectionList>
+          <SectionRow label="Method">personal_sign</SectionRow>
+          <SectionRow label="Message">
             <pre className="whitespace-pre-wrap break-words">
               {personalSignPreview.message ?? "(missing)"}
             </pre>
-          </div>
+          </SectionRow>
           {personalSignPreview.address && (
-            <div className="space-y-1">
-              <h3>Address</h3>
-              <div className="break-words">
-                {renderAddressValue(
-                  personalSignPreview.address,
-                  getKnownAddressLabel(personalSignPreview.address),
-                )}
-              </div>
-            </div>
+            <SectionRow label="Address">
+              {renderAddressValue(
+                personalSignPreview.address,
+                getKnownAddressLabel(personalSignPreview.address),
+              )}
+            </SectionRow>
           )}
-        </div>
+        </SectionList>
       );
     }
 
     return (
       <div className="space-y-3">
-        <div className="space-y-1">
-          <h3>Method</h3>
-          <pre className="whitespace-pre-wrap break-words">{method ?? "(missing)"}</pre>
+        <SectionList>
+          <SectionRow label="Method">{method ?? "(missing)"}</SectionRow>
+        </SectionList>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3>Parameters</h3>
+          {renderPreviewModeControl()}
         </div>
-        <div className="space-y-1">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h3>Parameters</h3>
-            {renderPreviewModeControl()}
-          </div>
-          {requestPreviewMode === "decoded" && hasSuccessfulDecoding ? (
-            renderDecodedParameters()
-          ) : structuredParameters ? (
-            structuredParameters
-          ) : (
-            <>
-              <pre className="whitespace-pre-wrap break-words">{requestParamsPreview}</pre>
-              {calldataTargets.length > 0 &&
-                decodedCalls &&
-                !isDecoding &&
-                !hasSuccessfulDecoding && (
-                  <p className="text-gray-500">
-                    Decoding did not resolve a function for this calldata.
-                  </p>
-                )}
-            </>
-          )}
-        </div>
+        {requestPreviewMode === "decoded" && hasSuccessfulDecoding ? (
+          renderDecodedParameters()
+        ) : structuredParameters ? (
+          structuredParameters
+        ) : (
+          <>
+            <pre className="whitespace-pre-wrap break-words">{requestParamsPreview}</pre>
+            {calldataTargets.length > 0 &&
+              decodedCalls &&
+              !isDecoding &&
+              !hasSuccessfulDecoding && (
+                <p className="text-gray-500">
+                  Decoding did not resolve a function for this calldata.
+                </p>
+              )}
+          </>
+        )}
       </div>
     );
   }
 
   return (
     <div className="min-h-screen text-gray-950">
-      <main className="box-border flex min-h-screen max-w-2xl flex-col gap-5 p-4">
+      <main className="flex flex-col gap-5">
         <header>
           <h1>
             <a href="/">txlink</a>
@@ -2210,7 +2234,7 @@ function App() {
               <div className="text-gray-500">Connect to continue</div>
             </div>
             {storedRequest && storedRequest.address && (
-              <div className="space-y-1">
+              <div className="space-y-px">
                 <div className="text-gray-500">Expected address</div>
                 <div className="break-words">
                   {renderAddressValue(
