@@ -134,7 +134,7 @@ Records expire after 7 days.
 - For `personal_sign`, use `{ message }` or `{ data }`; `address` may be omitted.
 - For `eth_signTypedData_v4`, use `{ typedData }` or `{ data }`; `address` may be omitted.
 - For `wallet_sendCalls`, use `{ calls: [{ to, data, value? }, ...] }`; `from` may be omitted.
-- For `wallet_sign`, use `{ version: "1.0", request: { type, data } }` (e.g. `type: "0x45"` for personal-sign messages, `type: "0x01"` for typed data); `address` and `capabilities` may be omitted. For address substitution, set `address` to `0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` (all `a`'s) and the app substitutes the connected account's address. If the wallet doesn't implement `wallet_sign` (ERC-7871), the app falls back to the equivalent classic method signed by the connected account: `personal_sign` for `0x45` or `eth_signTypedData_v4` for `0x01`, and wraps the returned signature plus the signed message as `{ signature, message, account }`.
+- For `wallet_sign`, use `{ version: "1.0", request: { type, data } }` (e.g. `type: "0x45"` for personal-sign messages, `type: "0x01"` for typed data); `address` and `capabilities` may be omitted. For account substitution, set any address field to `0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` (all `a`'s) and the app replaces the occurrence with the connected account's address. If the wallet doesn't implement `wallet_sign` (ERC-7871), the app falls back to the equivalent classic method signed by the connected account: `personal_sign` for `0x45` or `eth_signTypedData_v4` for `0x01`, and wraps the returned signature plus the signed message as `{ signature, message, account }`.
 
 ## Local Dev
 

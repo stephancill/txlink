@@ -262,6 +262,38 @@ function isWalletSignSubstituteAddress(address: string | undefined) {
   return typeof address === "string" && address.toLowerCase() === WALLET_SIGN_SUBSTITUTE_ACCOUNT;
 }
 
+// True when any string leaf in the value equals the substitution sentinel.
+function hasWalletSignSentinel(value: unknown): boolean {
+  if (typeof value === "string") return value.toLowerCase() === WALLET_SIGN_SUBSTITUTE_ACCOUNT;
+  if (Array.isArray(value)) return value.some((item) => hasWalletSignSentinel(item));
+  if (isJsonObject(value)) return Object.values(value).some((item) => hasWalletSignSentinel(item));
+  return false;
+}
+
+// Deep-replace sentinel leaves: with a replacement account they are swapped in;
+// with `null` they are omitted. Returns a new structure (matching Coinbase Keys).
+function substituteSentinelLeaves(value: unknown, replacement: string | null): unknown {
+  if (typeof value === "string") {
+    return value.toLowerCase() === WALLET_SIGN_SUBSTITUTE_ACCOUNT
+      ? (replacement ?? undefined)
+      : value;
+  }
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => substituteSentinelLeaves(item, replacement))
+      .filter((item) => item !== undefined);
+  }
+  if (isJsonObject(value)) {
+    const next: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value)) {
+      const substituted = substituteSentinelLeaves(item, replacement);
+      if (substituted !== undefined) next[key] = substituted;
+    }
+    return next;
+  }
+  return value;
+}
+
 function parseWalletSignCall(params: unknown): WalletSignCall | null {
   const call = Array.isArray(params) ? params[0] : params;
   if (!isJsonObject(call)) return null;
@@ -570,14 +602,13 @@ function buildRpcParams(
   }
 
   if (method === "wallet_sign" && isJsonObject(rawParams)) {
-    const next = { ...rawParams };
-    if (isWalletSignSubstituteAddress(next.address as string | undefined)) {
-      // 0xaaaa...aaa sentinel: use the connected account when available, else
-      // leave wallet_sign unbound so the wallet picks the account.
-      if (fallbackAddress) next.address = fallbackAddress;
-      else delete next.address;
+    if (hasWalletSignSentinel(rawParams)) {
+      // 0xaaaa...aa sentinel: deeply replace any occurrence with the connected
+      // account; when none is connected, drop the sentinel leaves so the request
+      // stays unbound (wallet picks the account).
+      return { ok: true, params: [substituteSentinelLeaves(rawParams, fallbackAddress ?? null)] };
     }
-    return { ok: true, params: [next] };
+    return { ok: true, params: [rawParams] };
   }
 
   // Generic fallback: treat the provided params object as the first param.
