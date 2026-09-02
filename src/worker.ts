@@ -1,4 +1,5 @@
 import { z } from "zod";
+import qrcode from "qrcode-generator";
 
 type D1Result<T = unknown> = {
   results?: T[];
@@ -130,6 +131,77 @@ function baseUrl(request: Request) {
   return url.origin;
 }
 
+type QrFormat = "svg" | "unicode";
+
+// `?qr=<value>` flag on request creation. `true`, `svg`, or any invalid value
+// defaults to an SVG data URI; `unicode` returns a terminal-scannable string.
+function parseQrFormat(value: string | null): QrFormat | null {
+  if (value === null) return null;
+  return value === "unicode" ? "unicode" : "svg";
+}
+
+type QrModules = { n: number; isDark(row: number, col: number): boolean };
+
+function buildQrModules(text: string): QrModules {
+  // Auto type number, medium error correction (good balance of density and
+  // scannability). Approval links are ASCII, so byte mode default is fine.
+  const qr = qrcode(0, "M");
+  qr.addData(text);
+  qr.make();
+  const n = qr.getModuleCount();
+  return { n, isDark: (row, col) => qr.isDark(row, col) };
+}
+
+function renderQrSvgDataUri(text: string): string {
+  const { n, isDark } = buildQrModules(text);
+  const margin = 4;
+  const size = n + margin * 2;
+  let path = "";
+  for (let row = 0; row < n; row++) {
+    const y = row + margin;
+    let col = 0;
+    while (col < n) {
+      if (!isDark(row, col)) {
+        col += 1;
+        continue;
+      }
+      const start = col;
+      while (col < n && isDark(row, col)) col += 1;
+      const width = col - start;
+      path += `M${start + margin} ${y}h${width}v1h-${width}z`;
+    }
+  }
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" shape-rendering="crispEdges">` +
+    `<rect width="${size}" height="${size}" fill="#fff"/>` +
+    `<path d="${path}" fill="#000"/></svg>`;
+  return `data:image/svg+xml;base64,${btoa(svg)}`;
+}
+
+// Terminal-friendly half-block QR: each character covers two module rows, which
+// matches typical terminal cell aspect ratio so it stays scanable when printed.
+function renderQrUnicode(text: string): string {
+  const { n, isDark } = buildQrModules(text);
+  const lines: string[] = [];
+  for (let row = 0; row < n; row += 2) {
+    let line = "";
+    for (let col = 0; col < n; col++) {
+      const top = isDark(row, col);
+      const bottom = row + 1 < n ? isDark(row + 1, col) : false;
+      if (top && bottom) line += "█";
+      else if (top) line += "▀";
+      else if (bottom) line += "▄";
+      else line += " ";
+    }
+    lines.push(line);
+  }
+  return lines.join("\n");
+}
+
+function renderQrDataUri(value: string, format: QrFormat) {
+  return format === "unicode" ? renderQrUnicode(value) : renderQrSvgDataUri(value);
+}
+
 function serializeRow(row: RequestRow, includeRequest = true) {
   return {
     id: row.id,
@@ -160,6 +232,7 @@ function serializeRow(row: RequestRow, includeRequest = true) {
 }
 
 async function createStoredRequest(request: Request, env: Env) {
+  const qrFormat = parseQrFormat(new URL(request.url).searchParams.get("qr"));
   const parsed = createRequestSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) {
     return json({ error: "Invalid request body", issues: parsed.error.issues }, { status: 400 });
@@ -196,12 +269,14 @@ async function createStoredRequest(request: Request, env: Env) {
     return json({ error: result.error ?? "Failed to store request" }, { status: 500 });
 
   const origin = baseUrl(request);
+  const approvalUrl = `${origin}/?id=${encodeURIComponent(id)}&token=${encodeURIComponent(completionToken)}`;
   return json(
     {
       id,
-      url: `${origin}/?id=${encodeURIComponent(id)}&token=${encodeURIComponent(completionToken)}`,
+      url: approvalUrl,
       statusUrl: `${origin}/api/requests/${encodeURIComponent(id)}`,
       expiresAt,
+      ...(qrFormat ? { qr: renderQrDataUri(approvalUrl, qrFormat), qrFormat } : {}),
     },
     { status: 201 },
   );

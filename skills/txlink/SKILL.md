@@ -86,6 +86,26 @@ Response:
 
 Send `url` to the user. Keep `statusUrl` so you can poll for completion. The URL includes a private completion token, so do not post it publicly unless the user approval link itself is intended to be public.
 
+#### QR code of the approval link
+
+Pass `?qr=true` (defaults to SVG) on the create call to also receive a QR code of the approval `url`:
+
+```http
+POST https://txlink.stupidtech.net/api/requests?qr=true
+```
+
+Response payload additionally includes:
+
+```json
+{
+  "qr": "data:image/svg+xml;base64,...",
+  "qrFormat": "svg"
+}
+```
+
+- `?qr=true` / `?qr=svg` / any invalid value → `qr` is an SVG data URI (`qrFormat: "svg"`), ready to render with an `<img>` or a QR scanner.
+- `?qr=unicode` → `qr` is a terminal-scannable half-block string (`qrFormat: "unicode"`) you can print directly in a terminal.
+
 Stored requests verify that the connected wallet matches `address` before execution.
 
 `address` may be omitted for `eth_requestAccounts`, `wallet_connect`, `wallet_sign`, and `wallet_sendCalls`. Those unbound requests are not tied to a single account, so no `address` appears in the stored request and any connected wallet may open them. For `wallet_sign` and `wallet_sendCalls`, `address` (or `from`) is still honored when provided, binding the request to that account.

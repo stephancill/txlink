@@ -77,6 +77,28 @@ Response:
 
 Send `url` to the user. The `token` in that URL is private and lets the frontend write the wallet result back to the stored request.
 
+#### QR code of the approval link
+
+Pass `?qr=true` (or `?qr=svg`) to also return a `qr` SVG data URI encoding the approval `url`, so it can be rendered as a QR code:
+
+```http
+POST https://txlink.stupidtech.net/api/requests?qr=true
+```
+
+```json
+{
+  "id": "tx_...",
+  "url": "https://txlink.stupidtech.net/?id=tx_...&token=...",
+  "statusUrl": "https://txlink.stupidtech.net/api/requests/tx_...",
+  "expiresAt": "...",
+  "qr": "data:image/svg+xml;base64,...",
+  "qrFormat": "svg"
+}
+```
+
+- `qr=true` or `qr=svg` (or any invalid value) → `qr` is an SVG data URI (`qrFormat: "svg"`).
+- `qr=unicode` → `qr` is a terminal-scannable half-block string (`qrFormat: "unicode"`):
+
 ### Poll for the result
 
 ```http
