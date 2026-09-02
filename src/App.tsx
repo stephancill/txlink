@@ -320,9 +320,17 @@ function getWalletSignMessage(call: WalletSignCall): unknown | undefined {
   return undefined;
 }
 
-function wrapWalletSignFallbackResult(signature: string, call: WalletSignCall | null) {
+function wrapWalletSignFallbackResult(
+  signature: string,
+  call: WalletSignCall | null,
+  connectedAddress?: string,
+) {
   const message = call ? getWalletSignMessage(call) : undefined;
-  return message !== undefined ? { signature, message } : { signature };
+  const account = call?.address ?? connectedAddress;
+  const result: { signature: string; message?: unknown; account?: string } = { signature };
+  if (message !== undefined) result.message = message;
+  if (account) result.account = account;
+  return result;
 }
 
 async function executeWalletRequest(
@@ -1157,7 +1165,11 @@ function App() {
         // SignResult shape so consumers always get `{ signature }`.
         const response =
           executed.usedWalletSignFallback && typeof executed.value === "string"
-            ? wrapWalletSignFallbackResult(executed.value, parseWalletSignCall(built.params))
+            ? wrapWalletSignFallbackResult(
+                executed.value,
+                parseWalletSignCall(built.params),
+                connectedAddress,
+              )
             : executed.value;
 
         if (storedRequestId && completionToken) {
