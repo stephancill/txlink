@@ -247,6 +247,127 @@ function decodePersonalSignMessage(value: unknown) {
   }
 }
 
+type WalletSignCall = {
+  address?: string;
+  type?: string;
+  data: unknown;
+};
+
+function parseWalletSignCall(params: unknown): WalletSignCall | null {
+  const call = Array.isArray(params) ? params[0] : params;
+  if (!isJsonObject(call)) return null;
+  const request = isJsonObject(call.request) ? call.request : null;
+  return {
+    address: typeof call.address === "string" ? call.address : undefined,
+    type: request && typeof request.type === "string" ? request.type : undefined,
+    data: request ? request.data : undefined,
+  };
+}
+
+// Detect wallet errors indicating `wallet_sign` is not implemented (as opposed
+// to a user rejection), so we can fall back to the equivalent classic method.
+function isUnsupportedMethodError(error: unknown) {
+  const err = (error ?? {}) as { code?: unknown; message?: unknown };
+  if (err.code === -32601) return true;
+  const message = typeof err.message === "string" ? err.message.toLowerCase() : "";
+  return /not supported|does not support|method not found|not implemented|unsupported|cannot find|not found/.test(
+    message,
+  );
+}
+
+// Build the classic JSON-RPC request equivalent to EIP-7871 wallet_sign for the
+// EIP-191 versions we can express with existing methods (personal_sign 0x45,
+// eth_signTypedData_v4 0x01). Requires an address for the wallet to sign from.
+function buildWalletSignFallback(
+  call: WalletSignCall,
+  connectedAddress: string | undefined,
+): { method: "personal_sign" | "eth_signTypedData_v4"; params: unknown[] } | null {
+  if (call.type !== "0x45" && call.type !== "0x01") return null;
+  const address = call.address ?? connectedAddress;
+  if (!address) return null;
+
+  if (call.type === "0x45") {
+    const message =
+      typeof call.data === "string"
+        ? call.data
+        : isJsonObject(call.data) && typeof call.data.message === "string"
+          ? call.data.message
+          : null;
+    if (message == null) return null;
+    const data = message.startsWith("0x") ? message : stringToHex(message);
+    return { method: "personal_sign", params: [data, address] };
+  }
+
+  const typedDataJson = typeof call.data === "string" ? call.data : JSON.stringify(call.data);
+  return { method: "eth_signTypedData_v4", params: [address, typedDataJson] };
+}
+
+// The human-readable "message" that a wallet_sign request signs, for echoing in
+// the wrapped result: the message string (0x45) or the EIP-712 message (0x01).
+function getWalletSignMessage(call: WalletSignCall): unknown | undefined {
+  if (call.type === "0x45") {
+    if (typeof call.data === "string") return call.data;
+    if (isJsonObject(call.data) && typeof call.data.message === "string") {
+      return call.data.message;
+    }
+    return undefined;
+  }
+  if (call.type === "0x01") {
+    if (isJsonObject(call.data) && "message" in call.data) return call.data.message;
+    return call.data;
+  }
+  return undefined;
+}
+
+function wrapWalletSignFallbackResult(signature: string, call: WalletSignCall | null) {
+  const message = call ? getWalletSignMessage(call) : undefined;
+  return message !== undefined ? { signature, message } : { signature };
+}
+
+async function executeWalletRequest(
+  // wagmi/viem are typed for known methods; this app is intentionally generic.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  walletClient: { request: (args: any) => Promise<unknown> },
+  request: { method: string; params: unknown[] },
+  connectedAddress?: string,
+): Promise<{
+  value: unknown;
+  usedWalletSignFallback: boolean;
+}> {
+  if (request.method !== "wallet_sign") {
+    return {
+      value: await walletClient.request({ method: request.method, params: request.params }),
+      usedWalletSignFallback: false,
+    };
+  }
+
+  try {
+    return {
+      value: await walletClient.request({ method: request.method, params: request.params }),
+      usedWalletSignFallback: false,
+    };
+  } catch (err) {
+    // Some wallets don't implement `wallet_sign` (ERC-7871) yet. Fall back to the
+    // classic personal_sign / eth_signTypedData_v4 request when the wallet reports
+    // the method as unsupported (never on a user rejection). The classic methods
+    // need an account, so fallback is skipped unless one is available.
+    if (isUnsupportedMethodError(err)) {
+      const call = parseWalletSignCall(request.params);
+      const fallback = call ? buildWalletSignFallback(call, connectedAddress) : null;
+      if (fallback) {
+        return {
+          value: await walletClient.request({
+            method: fallback.method,
+            params: fallback.params,
+          }),
+          usedWalletSignFallback: true,
+        };
+      }
+    }
+    throw err;
+  }
+}
+
 function getPersonalSignPreview(rawParams: unknown) {
   if (Array.isArray(rawParams)) {
     return {
@@ -1022,13 +1143,21 @@ function App() {
       }
 
       try {
-        const response = await walletClient.request({
-          // wagmi/viem are typed for known methods; this app is intentionally generic.
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          method: method as any,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          params: built.params as any,
-        });
+        // Some wallets don't implement `wallet_sign` (ERC-7871) yet. When the
+        // wallet reports the method as unsupported, fall back to the classic
+        // personal_sign / eth_signTypedData_v4 request signed by the connected
+        // account (which is required to connect before execution).
+        const executed = await executeWalletRequest(
+          walletClient,
+          { method, params: built.params },
+          connectedAddress,
+        );
+        // Fallback produces a bare classic signature; wrap it to the EIP-7871
+        // SignResult shape so consumers always get `{ signature }`.
+        const response =
+          executed.usedWalletSignFallback && typeof executed.value === "string"
+            ? wrapWalletSignFallbackResult(executed.value, parseWalletSignCall(built.params))
+            : executed.value;
 
         if (storedRequestId && completionToken) {
           const completeResponse = await fetch(

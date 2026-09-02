@@ -1,6 +1,6 @@
 ---
 name: txlink
-description: Use https://txlink.stupidtech.net to have a user execute a wallet action with their own wallet via a shareable URL. Use when an agent needs the user to approve/execute a JSON-RPC request (e.g. eth_sendTransaction, personal_sign, eth_signTypedData_v4, wallet_sendCalls), either as a direct link or as a stored request that can be polled for the result.
+description: Use https://txlink.stupidtech.net to have a user execute a wallet action with their own wallet via a shareable URL. Use when an agent needs the user to approve/execute a JSON-RPC request (e.g. eth_sendTransaction, personal_sign, eth_signTypedData_v4, wallet_sign, wallet_sendCalls), either as a direct link or as a stored request that can be polled for the result.
 ---
 
 # txlink (txlink.stupidtech.net)
@@ -88,7 +88,7 @@ Send `url` to the user. Keep `statusUrl` so you can poll for completion. The URL
 
 Stored requests verify that the connected wallet matches `address` before execution.
 
-`address` may be omitted for `eth_requestAccounts` and `wallet_connect`. Those unbound requests are not tied to a single account, so no `address` appears in the stored request and any connected wallet may open them.
+`address` may be omitted for `eth_requestAccounts`, `wallet_connect`, `wallet_sign`, and `wallet_sendCalls`. Those unbound requests are not tied to a single account, so no `address` appears in the stored request and any connected wallet may open them. For `wallet_sign` and `wallet_sendCalls`, `address` (or `from`) is still honored when provided, binding the request to that account.
 
 ## Poll For Completion
 
@@ -146,6 +146,7 @@ Records expire after 7 days.
 - For `personal_sign`, use `{ message }` or `{ data }`; `address` may be omitted.
 - For `eth_signTypedData_v4`, use `{ typedData }` or `{ data }`; `address` may be omitted.
 - For `wallet_sendCalls`, use `{ calls: [{ to, data, value? }, ...] }`; `from` may be omitted.
+- For `wallet_sign`, use `{ version: "1.0", request: { type, data } }` (e.g. `type: "0x45"` for personal-sign messages, `type: "0x01"` for typed data); `address` and `capabilities` may be omitted. If the wallet doesn't implement `wallet_sign` (ERC-7871), the app falls back to the equivalent classic method signed by the connected account: `personal_sign` for `0x45` or `eth_signTypedData_v4` for `0x01`, and wraps the returned signature plus the signed message as `{ signature, message }`.
 
 ## Safety Checks
 

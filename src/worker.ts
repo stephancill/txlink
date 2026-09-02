@@ -53,7 +53,12 @@ const jsonValueSchema: z.ZodType<unknown> = z.lazy(() =>
 );
 // Methods that may be bound to any account. Their stored request omits `address`
 // so execution is not tied to a single wallet account.
-const unboundRequestMethods = new Set(["eth_requestAccounts", "wallet_connect"]);
+const unboundRequestMethods = new Set([
+  "eth_requestAccounts",
+  "wallet_connect",
+  "wallet_sign",
+  "wallet_sendCalls",
+]);
 const createRequestSchema = z
   .object({
     address: z
