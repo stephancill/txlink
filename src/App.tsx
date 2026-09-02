@@ -5,8 +5,10 @@ import {
   type ExternalDataProvider,
   type RegistryIndex,
   type TrustedTokens,
+  type TypedData,
   fetchPrebuiltRegistryIndex,
   format as formatClearSigning,
+  formatTypedData,
   isFieldGroup,
 } from "@ethereum-sourcify/clear-signing";
 import { whatsabi } from "@shazow/whatsabi";
@@ -289,6 +291,39 @@ function parseWalletSignCall(params: unknown): WalletSignCall | null {
     address: typeof call.address === "string" ? call.address : undefined,
     type: request && typeof request.type === "string" ? request.type : undefined,
     data: request ? request.data : undefined,
+  };
+}
+
+type WalletSignTypedData = {
+  domain?: Record<string, unknown>;
+  types: Record<string, Array<{ name: string; type: string }>>;
+  primaryType: string;
+  message: Record<string, unknown>;
+};
+
+// Extract the EIP-712 typed data payload from a wallet_sign (EIP-7871) request
+// with the `0x01` type, so it can be cleared signed via formatTypedData. The
+// wallet_sign v1.0 shape wraps the EIP-712 object as `request.data`.
+function parseWalletSignTypedData(params: unknown[] | null): WalletSignTypedData | null {
+  const call = Array.isArray(params) ? params[0] : null;
+  if (!isJsonObject(call)) return null;
+  const request = isJsonObject(call.request) ? call.request : null;
+  if (!request || request.type !== "0x01") return null;
+  const data = isJsonObject(request.data) ? request.data : null;
+  if (
+    !data ||
+    !isJsonObject(data.domain) ||
+    !isJsonObject(data.types) ||
+    !isJsonObject(data.message)
+  ) {
+    return null;
+  }
+  if (typeof data.primaryType !== "string") return null;
+  return {
+    domain: data.domain,
+    types: data.types as WalletSignTypedData["types"],
+    primaryType: data.primaryType,
+    message: data.message,
   };
 }
 
@@ -706,6 +741,41 @@ function formatBase18Significant(value: bigint) {
 
   coefficient = coefficient.replace(/\.0*$/, "").replace(/(\.\d*?)0+$/, "$1");
   return `${sign}${coefficient} x10¹⁸`;
+}
+
+// Render a human-friendly relative time (e.g. "in 1 hour", "10 years ago") for a
+// rendered date string such as the clear-signing "date" field output.
+function formatRelativeTime(dateString: string): string | null {
+  const timestamp = Date.parse(dateString.replace(" ", "T"));
+  if (Number.isNaN(timestamp)) return null;
+
+  const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  const diffMs = timestamp - Date.now();
+  const absMs = Math.abs(diffMs);
+
+  let unit: Intl.RelativeTimeFormatUnit;
+  let value: number;
+  if (absMs < 45_000) {
+    unit = "second";
+    value = 0;
+  } else if (absMs < 90 * 60_000) {
+    unit = "minute";
+    value = Math.trunc(diffMs / 60_000);
+  } else if (absMs < 36 * 3_600_000) {
+    unit = "hour";
+    value = Math.trunc(diffMs / 3_600_000);
+  } else if (absMs < 45 * 86_400_000) {
+    unit = "day";
+    value = Math.trunc(diffMs / 86_400_000);
+  } else if (absMs < 547 * 86_400_000) {
+    unit = "month";
+    value = Math.trunc(diffMs / (30.44 * 86_400_000));
+  } else {
+    unit = "year";
+    value = Math.round(diffMs / (365.25 * 86_400_000));
+  }
+
+  return rtf.format(value, unit);
 }
 
 function App() {
@@ -1184,6 +1254,103 @@ function App() {
       chainIdSupported && builtOk && !!method && !!publicClient && calldataTargets.length > 0,
   });
 
+  // EIP-7871 `wallet_sign` requests carry EIP-712 typed data (type `0x01`) that
+  // we clear-sign via formatTypedData (rather than calldata decoding). Source the
+  // value from the built params so any 0xaaaa… sentinel is already replaced with
+  // the connected account before we resolve the "From" field.
+  const walletTypedData = React.useMemo(() => {
+    if (method !== "wallet_sign") return null;
+    const parsed = parseWalletSignTypedData(rpcParams);
+    if (!parsed) return null;
+    return { ...parsed, account: connectedAddress } as TypedData;
+  }, [method, connectedAddress, rpcParams]);
+  const walletTypedDataKey = React.useMemo(
+    () =>
+      walletTypedData
+        ? JSON.stringify({
+            domain: walletTypedData.domain,
+            types: walletTypedData.types,
+            primaryType: walletTypedData.primaryType,
+            message: walletTypedData.message,
+          })
+        : null,
+    [walletTypedData],
+  );
+  const { data: walletTypedDataDisplay = null, isLoading: isWalletTypedDataDecoding } = useQuery({
+    queryKey: ["walletTypedData", requestedChainId, walletTypedDataKey] as const,
+    queryFn: async () => {
+      if (!publicClient) throw new Error("No public client");
+      if (!walletTypedData) throw new Error("No typed data to display");
+      const index = await getClearSigningRegistryIndex();
+      const resolveToken = async (_chainId: number, address: string) => {
+        if (!isAddress(address)) return null;
+
+        try {
+          const [symbol, name, decimals] = await Promise.all([
+            publicClient.readContract({
+              address,
+              abi: erc20Abi,
+              functionName: "symbol",
+            }),
+            publicClient.readContract({
+              address,
+              abi: erc20Abi,
+              functionName: "name",
+            }),
+            publicClient.readContract({
+              address,
+              abi: erc20Abi,
+              functionName: "decimals",
+            }),
+          ]);
+
+          if (
+            typeof symbol !== "string" ||
+            typeof name !== "string" ||
+            typeof decimals !== "number"
+          ) {
+            return null;
+          }
+
+          return { symbol, name, decimals };
+        } catch {
+          return null;
+        }
+      };
+      const externalDataProvider: ExternalDataProvider = {
+        resolveEnsName: async (address) => {
+          if (!isAddress(address)) return null;
+
+          try {
+            const name = await ensClient.getEnsName({ address });
+            return name ? { name, typeMatch: true } : null;
+          } catch {
+            return null;
+          }
+        },
+        resolveToken,
+        resolveChainInfo: async (chainId) => {
+          const chain = config.chains.find((c) => c.id === chainId);
+          return chain
+            ? {
+                name: chain.name,
+                nativeCurrency: chain.nativeCurrency,
+              }
+            : null;
+        },
+      };
+
+      return formatTypedData(walletTypedData, {
+        descriptorResolverOptions: {
+          type: "github",
+          index,
+        },
+        externalDataProvider,
+      });
+    },
+    enabled: !!walletTypedData && !!publicClient && chainIdSupported,
+  });
+
   const executionMutation = useMutation({
     mutationFn: async () => {
       if (!walletClient || !method || !built.ok) {
@@ -1307,10 +1474,13 @@ function App() {
     }
     return [...out].sort();
   }, [decodedOkCalls]);
-  const displayAddresses = React.useMemo(
-    () => [...new Set([...requestAddresses, ...decodedAddresses])].sort(),
-    [decodedAddresses, requestAddresses],
-  );
+  const displayAddresses = React.useMemo(() => {
+    const out = new Set<string>();
+    for (const address of requestAddresses) out.add(address.toLowerCase());
+    for (const address of decodedAddresses) out.add(address.toLowerCase());
+    if (walletTypedData) collectAddresses(walletTypedData.message, out);
+    return [...out].sort();
+  }, [decodedAddresses, requestAddresses, walletTypedData]);
   const { data: ensLabels = {} } = useQuery({
     queryKey: ["ensLabels", displayAddresses] as const,
     queryFn: async () => {
@@ -1329,25 +1499,28 @@ function App() {
     },
     enabled: displayAddresses.length > 0,
   });
-  const hasSuccessfulDecoding = decodedOkCalls.length > 0;
+  const strippedTypedDataDisplay =
+    walletTypedDataDisplay && hasClearSigningDisplay(walletTypedDataDisplay)
+      ? walletTypedDataDisplay
+      : null;
+  const hasSuccessfulDecoding = decodedOkCalls.length > 0 || strippedTypedDataDisplay != null;
   const [requestPreviewMode, setRequestPreviewMode] = React.useState<"decoded" | "raw">("raw");
   const hadDecodedRef = React.useRef(false);
 
   // Default to Decoded when it becomes available for a request.
   React.useEffect(() => {
-    const hasDecodedNow = decodedOkCalls.length > 0;
-    if (!hadDecodedRef.current && hasDecodedNow) {
+    if (!hadDecodedRef.current && hasSuccessfulDecoding) {
       setRequestPreviewMode("decoded");
     }
-    hadDecodedRef.current = hasDecodedNow;
-  }, [decodedOkCalls.length]);
+    hadDecodedRef.current = hasSuccessfulDecoding;
+  }, [hasSuccessfulDecoding]);
 
   // If the decoded view disappears, fall back to Raw.
   React.useEffect(() => {
-    if (requestPreviewMode === "decoded" && decodedOkCalls.length === 0) {
+    if (requestPreviewMode === "decoded" && !hasSuccessfulDecoding) {
       setRequestPreviewMode("raw");
     }
-  }, [decodedOkCalls.length, requestPreviewMode]);
+  }, [hasSuccessfulDecoding, requestPreviewMode]);
 
   function renderPreviewModeControl() {
     if (hasSuccessfulDecoding) {
@@ -1377,8 +1550,12 @@ function App() {
       );
     }
 
-    if (calldataTargets.length > 0) {
-      return <span className="text-gray-500">{isDecoding ? "Decoding" : "Raw"}</span>;
+    if (calldataTargets.length > 0 || (walletTypedData && !hasSuccessfulDecoding)) {
+      return (
+        <span className="text-gray-500">
+          {isDecoding || isWalletTypedDataDecoding ? "Decoding" : "Raw"}
+        </span>
+      );
     }
 
     return null;
@@ -1616,7 +1793,25 @@ function App() {
     const rawAddress = field.rawAddress;
     const value = rawAddress && isAddress(rawAddress) ? rawAddress : field.value;
 
+    if (field.format === "date") {
+      const relative = formatRelativeTime(value);
+      return (
+        <span>
+          {value}
+          {relative ? ` (${relative})` : ""}
+        </span>
+      );
+    }
+
     return isAddress(value) ? renderAddressValue(value, field.value) : value;
+  }
+
+  // Show a field warning unless it's the noise-y "could not resolve the address
+  // name" note that appears whenever no name is on-chain for a plain address.
+  function renderFieldWarning(field: DisplayField | DisplayFieldGroup) {
+    const warning = field.warning;
+    if (!warning || warning.code === "UNKNOWN_ADDRESS") return null;
+    return <div className="text-gray-500">{warning.message}</div>;
   }
 
   function renderClearSigningField(field: DisplayField | DisplayFieldGroup, key: string) {
@@ -1627,7 +1822,7 @@ function App() {
           <div className="space-y-2 pl-4">
             {field.fields.map((item, idx) => renderClearSigningField(item, `${key}:${idx}`))}
           </div>
-          {field.warning && <div className="text-gray-500">{field.warning.message}</div>}
+          {renderFieldWarning(field)}
         </div>
       );
     }
@@ -1646,7 +1841,7 @@ function App() {
             )}
           </div>
         )}
-        {field.warning && <div className="text-gray-500">{field.warning.message}</div>}
+        {renderFieldWarning(field)}
       </div>
     );
   }
@@ -1691,11 +1886,13 @@ function App() {
             {model.fields.map((field, idx) => renderClearSigningField(field, String(idx)))}
           </div>
         )}
-        {model.warnings?.map((warning, idx) => (
-          <div key={`${warning.code}:${idx}`} className="text-gray-500">
-            {warning.message}
-          </div>
-        ))}
+        {model.warnings
+          ?.filter((warning) => warning.code !== "UNKNOWN_ADDRESS")
+          .map((warning, idx) => (
+            <div key={`${warning.code}:${idx}`} className="text-gray-500">
+              {warning.message}
+            </div>
+          ))}
       </div>
     );
   }
@@ -1780,6 +1977,24 @@ function App() {
   }
 
   function renderDecodedParameters() {
+    if (method === "wallet_sign" && walletTypedData && strippedTypedDataDisplay) {
+      const verifyingContract = walletTypedData.domain?.verifyingContract;
+      const contractAddress =
+        typeof verifyingContract === "string" && isAddress(verifyingContract)
+          ? verifyingContract
+          : undefined;
+      const contractName =
+        typeof walletTypedData.domain?.name === "string"
+          ? walletTypedData.domain.name
+          : "Signed message";
+
+      return (
+        <div className="space-y-2">
+          {renderClearSigningModel(strippedTypedDataDisplay, contractName, false, contractAddress)}
+        </div>
+      );
+    }
+
     const clearSigningCalls = decodedOkCalls.filter((call) => call.clearSigning);
 
     if (method === "wallet_sendCalls" && decodedCalls && clearSigningCalls.length > 0) {
