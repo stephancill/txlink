@@ -58,7 +58,8 @@ bun run build
 
 ## Deployment
 
-- Deploy with:
+- Deployment to `https://txlink.stupidtech.net` is automatic: pushing to `main` on GitHub triggers a Cloudflare Pages/Workers Git integration deploy of both the static assets and `src/worker.ts`. No manual `bun run deploy` is required — committing and pushing is sufficient to ship.
+- If you need to deploy manually, run:
 
 ```bash
 bun run deploy
