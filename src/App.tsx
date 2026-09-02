@@ -50,6 +50,7 @@ type StoredRequest = {
   resultType?: "string" | "json" | null;
   result?: unknown;
   error?: string | null;
+  completedBy?: string;
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;
@@ -1167,6 +1168,7 @@ function App() {
               headers: { "content-type": "application/json" },
               body: JSON.stringify({
                 completionToken,
+                address: connectedAddress,
                 result: response,
                 resultType: typeof response === "string" ? "string" : "json",
               }),

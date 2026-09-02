@@ -36,6 +36,7 @@ type RequestRow = {
   updated_at: string;
   completed_at: string | null;
   expires_at: string;
+  completed_by: string | null;
 };
 
 const retentionMs = 7 * 24 * 60 * 60 * 1_000;
@@ -76,6 +77,11 @@ const createRequestSchema = z
 const completeRequestSchema = z
   .object({
     completionToken: z.string().min(1),
+    // The connected wallet account that executed/completed the request.
+    address: z
+      .string()
+      .regex(/^0x[a-fA-F0-9]{40}$/)
+      .optional(),
     resultType: z.enum(["string", "json"]).optional(),
     result: jsonValueSchema.optional(),
     error: z.string().optional(),
@@ -138,6 +144,7 @@ function serializeRow(row: RequestRow, includeRequest = true) {
         }
       : {}),
     status: row.status,
+    ...(row.completed_by ? { completedBy: row.completed_by } : {}),
     ...(row.status === "completed"
       ? {
           resultType: row.result_type,
@@ -203,7 +210,7 @@ async function createStoredRequest(request: Request, env: Env) {
 async function getStoredRequest(id: string, env: Env) {
   const row = await env.TXLINK_DB.prepare(
     `SELECT id, address, method, chain_id, params_json, status, result_type, result_json,
-      error, created_at, updated_at, completed_at, expires_at
+      error, created_at, updated_at, completed_at, expires_at, completed_by
     FROM requests WHERE id = ? AND expires_at > ?`,
   )
     .bind(id, toIso(new Date()))
@@ -241,13 +248,15 @@ async function completeStoredRequest(id: string, request: Request, env: Env) {
       : (parsed.data.resultType ?? (typeof parsed.data.result === "string" ? "string" : "json"));
   const resultJson = parsed.data.result === undefined ? null : JSON.stringify(parsed.data.result);
   const error = parsed.data.error ?? null;
+  const completedBy = parsed.data.address ? parsed.data.address.toLowerCase() : null;
 
   const result = await env.TXLINK_DB.prepare(
     `UPDATE requests
-    SET status = ?, result_type = ?, result_json = ?, error = ?, updated_at = ?, completed_at = ?
+    SET status = ?, result_type = ?, result_json = ?, error = ?,
+      completed_by = ?, updated_at = ?, completed_at = ?
     WHERE id = ? AND status = 'pending'`,
   )
-    .bind(status, resultType, resultJson, error, now, now, id)
+    .bind(status, resultType, resultJson, error, completedBy, now, now, id)
     .run();
 
   if (!result.success)

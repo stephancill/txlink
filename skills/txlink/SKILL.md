@@ -121,10 +121,13 @@ Completed:
 {
   "id": "tx_...",
   "status": "completed",
+  "completedBy": "0x...",
   "resultType": "string",
   "result": "0xTransactionHash"
 }
 ```
+
+`completedBy` is the connected wallet account that executed the request (also present on failed responses).
 
 Failed:
 
