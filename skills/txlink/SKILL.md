@@ -84,7 +84,7 @@ Response:
 }
 ```
 
-Send `url` to the user. Keep `statusUrl` so you can poll for completion. The URL includes a private completion token, so do not post it publicly unless the user approval link itself is intended to be public.
+Send `url` to the user. Keep `statusUrl` so you can poll for completion. The URL includes a private completion token, and the token is **required** to complete the request: when the user opens the approval page and executes the request, the page uses that token to mark the stored request as `completed`/`failed` on the server. If the token is stripped or wrong, the page cannot record the result and the request stays `pending` forever — polling `statusUrl` will never show completion. Always pass the full `url` (with `token`) straight to the user, and do not post it publicly unless the approval link itself is intended to be public.
 
 #### QR code of the approval link
 
