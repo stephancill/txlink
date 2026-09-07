@@ -1,5 +1,12 @@
-import type { Chain, PublicClient, WalletClient } from "viem";
+import type { Chain, PublicClient } from "viem";
 import { createPublicClient, http, numberToHex } from "viem";
+
+// Minimal JSON-RPC provider surface (matches the EIP-1193 provider returned by
+// a connector); enough for chain switching and executing wallet methods without
+// depending on wagmi's chain registry.
+export type JsonRpcProvider = {
+  request(args: { method: string; params?: readonly unknown[] }): Promise<unknown>;
+};
 
 export type ChainNativeCurrency = {
   name: string;
@@ -95,17 +102,17 @@ export function isChainNotAddedError(error: unknown): boolean {
 // Switch the connected wallet to the chain, auto-adding it (wallet_addEthereumChain)
 // when the wallet reports the chain is unknown. The chain name passed to addEthereumChain
 // is the API-provided `name` (e.g. "Base", "Step Network").
-export async function switchToChain(walletClient: WalletClient, info: ChainInfo): Promise<void> {
+export async function switchToChain(provider: JsonRpcProvider, info: ChainInfo): Promise<void> {
   const chainIdHex = numberToHex(info.chainId);
   try {
-    await walletClient.request({
+    await provider.request({
       method: "wallet_switchEthereumChain",
       params: [{ chainId: chainIdHex }],
     });
   } catch (error) {
     if (!isChainNotAddedError(error)) throw error;
 
-    await walletClient.request({
+    await provider.request({
       method: "wallet_addEthereumChain",
       params: [
         {

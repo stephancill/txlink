@@ -30,7 +30,7 @@ import {
 } from "viem";
 import { mainnet } from "viem/chains";
 import { useConnect, useConnection, useConnectors, useDisconnect, useWalletClient } from "wagmi";
-import { fetchChainInfo, getPublicClient, switchToChain } from "./lib/chain";
+import { fetchChainInfo, getPublicClient, switchToChain, type JsonRpcProvider } from "./lib/chain";
 
 type JsonObject = Record<string, unknown>;
 
@@ -821,7 +821,35 @@ function App() {
   const { connect, error } = useConnect();
   const connectors = useConnectors();
   const { disconnect } = useDisconnect();
+  // wagmi's wallet client (works for chains registered in the config).
   const { data: walletClient } = useWalletClient();
+
+  // Raw EIP-1193 provider from the connected connector. Prefer this so chain
+  // switching and request execution work even when the connected/requested chain
+  // is not in the wagmi chain registry. Guarded because not every connector
+  // exposes getProvider(); fall back to the wagmi wallet client otherwise.
+  const connectedConnector = connection.connector;
+  const [walletProvider, setWalletProvider] = React.useState<JsonRpcProvider | null>(null);
+  React.useEffect(() => {
+    if (!connectedConnector || typeof (connectedConnector as any).getProvider !== "function") {
+      setWalletProvider(null);
+      return;
+    }
+    let active = true;
+    void (connectedConnector as any)
+      .getProvider()
+      .then((provider: unknown) => {
+        if (active) setWalletProvider(provider as JsonRpcProvider);
+      })
+      .catch(() => {
+        if (active) setWalletProvider(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [connectedConnector]);
+  const walletRpc: JsonRpcProvider | null =
+    walletProvider ?? (walletClient as unknown as JsonRpcProvider) ?? null;
 
   const [storedRequestId] = useQueryState("id");
   const [completionToken] = useQueryState("token");
@@ -1004,8 +1032,8 @@ function App() {
 
   const chainSwitchMutation = useMutation({
     mutationFn: async () => {
-      if (!walletClient || !chainInfo) throw new Error("Missing wallet client or chain info");
-      await switchToChain(walletClient, chainInfo);
+      if (!walletRpc || !chainInfo) throw new Error("Missing wallet client or chain info");
+      await switchToChain(walletRpc, chainInfo);
     },
   });
   const isSwitchingChain = chainSwitchMutation.isPending;
@@ -1029,7 +1057,7 @@ function App() {
     if (!isConnected) return;
     if (!chainInfo) return;
     if (!connectedAddress) return;
-    if (!walletClient) return;
+    if (!walletRpc) return;
     if (requestedChainId == null) return;
     if (connection.chainId === requestedChainId) return;
 
@@ -1038,18 +1066,11 @@ function App() {
     lastAutoSwitchKeyRef.current = key;
 
     chainSwitchMutation.mutate();
-  }, [
-    chainInfo,
-    connectedAddress,
-    connection.chainId,
-    isConnected,
-    requestedChainId,
-    walletClient,
-  ]);
+  }, [chainInfo, connectedAddress, connection.chainId, isConnected, requestedChainId, walletRpc]);
 
   const canOpenRequest =
     connection.status === "connected" &&
-    walletClient != null &&
+    walletRpc != null &&
     builtOk &&
     chainInfo != null &&
     !isStoredRequestLoading &&
@@ -1418,7 +1439,7 @@ function App() {
 
   const executionMutation = useMutation({
     mutationFn: async () => {
-      if (!walletClient || !method || !built.ok) {
+      if (!walletRpc || !method || !built.ok) {
         throw new Error("Missing wallet client or method");
       }
 
@@ -1428,7 +1449,7 @@ function App() {
         // personal_sign / eth_signTypedData_v4 request signed by the connected
         // account (which is required to connect before execution).
         const executed = await executeWalletRequest(
-          walletClient,
+          walletRpc,
           { method, params: built.params },
           connectedAddress,
         );
@@ -1509,7 +1530,7 @@ function App() {
     if (!isConnected) return "Connect your wallet above to open this request.";
     if (needsChainSwitch) return `Switch to chainId ${requestedChainId} to continue.`;
     if (requestError) return null;
-    if (!walletClient) return "Waiting for wallet client.";
+    if (!walletRpc) return "Waiting for wallet client.";
     return "Waiting until this request is ready.";
   }, [
     isConnected,
@@ -1518,7 +1539,7 @@ function App() {
     requestError,
     requestedChainId,
     storedRequest,
-    walletClient,
+    walletRpc,
   ]);
 
   const decodedOkCalls = React.useMemo(
@@ -2351,12 +2372,10 @@ function App() {
                         <button
                           type="button"
                           className="mt-2"
-                          disabled={!walletClient}
+                          disabled={!walletRpc}
                           onClick={() => chainSwitchMutation.mutate()}
                         >
-                          {walletClient
-                            ? `Switch to ${chainInfo.name}`
-                            : "Waiting for wallet client…"}
+                          {walletRpc ? `Switch to ${chainInfo.name}` : "Waiting for wallet client…"}
                         </button>
                       )}
                     </div>
