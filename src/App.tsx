@@ -29,16 +29,8 @@ import {
   stringToHex,
 } from "viem";
 import { mainnet } from "viem/chains";
-import {
-  useConnect,
-  useConnection,
-  useConnectors,
-  useDisconnect,
-  usePublicClient,
-  useSwitchChain,
-  useWalletClient,
-} from "wagmi";
-import { config } from "./wagmi";
+import { useConnect, useConnection, useConnectors, useDisconnect, useWalletClient } from "wagmi";
+import { fetchChainInfo, getPublicClient, switchToChain } from "./lib/chain";
 
 type JsonObject = Record<string, unknown>;
 
@@ -830,7 +822,6 @@ function App() {
   const connectors = useConnectors();
   const { disconnect } = useDisconnect();
   const { data: walletClient } = useWalletClient();
-  const { switchChainAsync } = useSwitchChain();
 
   const [storedRequestId] = useQueryState("id");
   const [completionToken] = useQueryState("token");
@@ -948,20 +939,27 @@ function App() {
   const chainIdOk =
     requestedChainId != null && Number.isInteger(requestedChainId) && requestedChainId > 0;
 
-  type SupportedChainId = (typeof config.chains)[number]["id"];
-  const supportedChainIds = React.useMemo(
-    () => config.chains.map((c) => c.id as SupportedChainId),
-    [],
-  );
-  const chainIdSupported =
-    chainIdOk && supportedChainIds.includes(requestedChainId as SupportedChainId);
-  const requestedChain = React.useMemo(
-    () => config.chains.find((c) => c.id === requestedChainId),
-    [requestedChainId],
-  );
+  // Chain info is loaded on demand from the chain API rather than from a static
+  // list, so any chain the API knows about is supported.
+  const chainInfoQuery = useQuery({
+    queryKey: ["chainInfo", requestedChainId] as const,
+    queryFn: async () => {
+      if (requestedChainId == null) return null;
+      const info = await fetchChainInfo(requestedChainId);
+      if (!info) throw new Error(`Unknown chainId ${requestedChainId}`);
+      return info;
+    },
+    enabled: chainIdOk,
+    staleTime: Infinity,
+  });
+  const chainInfo = chainInfoQuery.data ?? null;
+  const chainInfoUnavailable = chainIdOk && !chainInfoQuery.isLoading && chainInfo == null;
 
-  const publicClient = usePublicClient(
-    chainIdSupported ? { chainId: requestedChainId as SupportedChainId } : undefined,
+  // Public client for on-chain reads (ABI/token/ENS decoding), built from the
+  // API chain info so it works for chains not registered with wagmi.
+  const publicClient = React.useMemo(
+    () => (chainInfo ? getPublicClient(chainInfo) : undefined),
+    [chainInfo],
   );
 
   const isConnected = connection.status === "connected";
@@ -986,8 +984,8 @@ function App() {
       ? `Could not load stored request: ${storedRequestError}`
       : !chainIdOk
         ? "Missing or invalid `chainId` query param (expected integer chain id, e.g. 1, 11155111)."
-        : !chainIdSupported
-          ? `Unsupported chainId ${requestedChainId}. Supported: ${supportedChainIds.join(", ")}`
+        : chainInfoUnavailable
+          ? `Unsupported or unknown chainId ${requestedChainId}.`
           : connectedAddressMismatch
             ? `This request is for ${storedRequest?.address}, but you connected ${connectedAddress}.`
             : missingCompletionToken
@@ -1005,8 +1003,9 @@ function App() {
     connection.chainId !== requestedChainId;
 
   const chainSwitchMutation = useMutation({
-    mutationFn: async (chainId: SupportedChainId) => {
-      await switchChainAsync({ chainId });
+    mutationFn: async () => {
+      if (!walletClient || !chainInfo) throw new Error("Missing wallet client or chain info");
+      await switchToChain(walletClient, chainInfo);
     },
   });
   const isSwitchingChain = chainSwitchMutation.isPending;
@@ -1018,29 +1017,41 @@ function App() {
 
   const lastAutoSwitchKeyRef = React.useRef<string | null>(null);
 
+  // Auto-switch to the requested chain once per (address, chainId), but only once
+  // the wallet client and chain info are both ready (so it waits for the wallet
+  // client to hydrate and retries when it becomes available). The guard is *not*
+  // re-armed when the wallet briefly reports the target chainId: on chains unknown
+  // to wagmi/the wallet the reported chainId can oscillate, which otherwise
+  // re-triggers the switch in a loop and glitches the UI. Use the manual
+  // "Switch to <chain>" button to retry after a failure.
   // biome-ignore lint/correctness/useExhaustiveDependencies: auto-switch once per (address, chainId)
   React.useEffect(() => {
     if (!isConnected) return;
-    if (!chainIdSupported) return;
+    if (!chainInfo) return;
     if (!connectedAddress) return;
+    if (!walletClient) return;
     if (requestedChainId == null) return;
-    if (connection.chainId === requestedChainId) {
-      lastAutoSwitchKeyRef.current = null;
-      return;
-    }
+    if (connection.chainId === requestedChainId) return;
 
     const key = `${connectedAddress}:${requestedChainId}`;
     if (lastAutoSwitchKeyRef.current === key) return;
     lastAutoSwitchKeyRef.current = key;
 
-    chainSwitchMutation.mutate(requestedChainId as SupportedChainId);
-  }, [chainIdSupported, connectedAddress, connection.chainId, isConnected, requestedChainId]);
+    chainSwitchMutation.mutate();
+  }, [
+    chainInfo,
+    connectedAddress,
+    connection.chainId,
+    isConnected,
+    requestedChainId,
+    walletClient,
+  ]);
 
   const canOpenRequest =
     connection.status === "connected" &&
     walletClient != null &&
     builtOk &&
-    chainIdSupported &&
+    chainInfo != null &&
     !isStoredRequestLoading &&
     !storedRequestError &&
     !connectedAddressMismatch &&
@@ -1107,11 +1118,15 @@ function App() {
         },
         resolveToken,
         resolveChainInfo: async (chainId) => {
-          const chain = config.chains.find((c) => c.id === chainId);
-          return chain
+          const found = chainInfo?.chainId === chainId ? chainInfo : null;
+          return found
             ? {
-                name: chain.name,
-                nativeCurrency: chain.nativeCurrency,
+                name: found.name,
+                nativeCurrency: found.nativeCurrency ?? {
+                  name: found.name,
+                  symbol: found.shortName.toUpperCase(),
+                  decimals: 18,
+                },
               }
             : null;
         },
@@ -1297,7 +1312,7 @@ function App() {
       );
     },
     enabled:
-      chainIdSupported && builtOk && !!method && !!publicClient && calldataTargets.length > 0,
+      chainInfo != null && builtOk && !!method && !!publicClient && calldataTargets.length > 0,
   });
 
   // EIP-7871 `wallet_sign` requests carry EIP-712 typed data (type `0x01`) that
@@ -1376,11 +1391,15 @@ function App() {
         },
         resolveToken,
         resolveChainInfo: async (chainId) => {
-          const chain = config.chains.find((c) => c.id === chainId);
-          return chain
+          const found = chainInfo?.chainId === chainId ? chainInfo : null;
+          return found
             ? {
-                name: chain.name,
-                nativeCurrency: chain.nativeCurrency,
+                name: found.name,
+                nativeCurrency: found.nativeCurrency ?? {
+                  name: found.name,
+                  symbol: found.shortName.toUpperCase(),
+                  decimals: 18,
+                },
               }
             : null;
         },
@@ -1394,7 +1413,7 @@ function App() {
         externalDataProvider,
       });
     },
-    enabled: !!walletTypedData && !!publicClient && chainIdSupported,
+    enabled: !!walletTypedData && !!publicClient && chainInfo != null,
   });
 
   const executionMutation = useMutation({
@@ -1612,9 +1631,9 @@ function App() {
     return match?.tokenLabel || ensLabels[address.toLowerCase()] || match?.contractName;
   }
 
-  function getAddressExplorerUrl(address: string) {
-    const explorerUrl = requestedChain?.blockExplorers?.default.url;
-    return explorerUrl ? `${explorerUrl.replace(/\/$/, "")}/address/${address}` : null;
+  function getAddressExplorerUrl(_address: string) {
+    // The chain API does not expose block explorer URLs, so no explorer links.
+    return null;
   }
 
   function renderAddressValue(address: string, label?: string) {
@@ -2247,18 +2266,7 @@ function App() {
             <div className="space-y-3">
               <div className="flex max-w-xs flex-col gap-2">
                 {connectors.map((connector) => (
-                  <button
-                    type="button"
-                    key={connector.uid}
-                    onClick={() =>
-                      connect({
-                        connector,
-                        chainId: chainIdSupported
-                          ? (requestedChainId as SupportedChainId)
-                          : undefined,
-                      })
-                    }
-                  >
+                  <button type="button" key={connector.uid} onClick={() => connect({ connector })}>
                     {connector.name}
                   </button>
                 ))}
@@ -2336,9 +2344,21 @@ function App() {
                         {chainSwitchError
                           ? chainSwitchError
                           : isSwitchingChain
-                            ? `Approve switching to chainId ${requestedChainId} in your wallet.`
-                            : `Please switch to chainId ${requestedChainId} in your wallet.`}
+                            ? `Approve switching to ${chainInfo ? chainInfo.name : `chainId ${requestedChainId}`} in your wallet.`
+                            : `Please switch to ${chainInfo ? chainInfo.name : `chainId ${requestedChainId}`} in your wallet.`}
                       </div>
+                      {!isSwitchingChain && chainInfo && (
+                        <button
+                          type="button"
+                          className="mt-2"
+                          disabled={!walletClient}
+                          onClick={() => chainSwitchMutation.mutate()}
+                        >
+                          {walletClient
+                            ? `Switch to ${chainInfo.name}`
+                            : "Waiting for wallet client…"}
+                        </button>
+                      )}
                     </div>
                   )}
 

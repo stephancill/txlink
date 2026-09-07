@@ -1,11 +1,11 @@
 import type { Chain } from "viem";
 import { createConfig, http, type Transport } from "wagmi";
-import * as chains from "wagmi/chains";
 import { baseAccount } from "wagmi/connectors";
+import { mainnet } from "wagmi/chains";
 
-const chainList = Object.values(chains) as unknown as readonly [Chain, ...Chain[]];
+const chainList = [mainnet] as unknown as readonly [Chain, ...Chain[]];
 
-const transports = chainList.reduce(
+const transports: Record<number, Transport> = chainList.reduce(
   (acc, chain) => {
     acc[chain.id] = http(`https://evm.stupidtech.net/v1/${chain.id}`);
     return acc;
