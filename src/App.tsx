@@ -1817,56 +1817,71 @@ function App() {
     const indent = "  ".repeat(depth);
     const nextIndent = "  ".repeat(depth + 1);
 
-    if (Array.isArray(value) && input?.components) {
-      const isTupleArray =
-        rawType === "tuple[]" || (typeof rawType === "string" && /^tuple\[\d+\]$/.test(rawType));
+    const components = input?.components;
+    const isTuple = typeof rawType === "string" && rawType.startsWith("tuple");
+    const isStructured = (v: unknown) => Array.isArray(v) || isJsonObject(v);
 
-      if (isTupleArray) {
+    // Render arrays and objects from their runtime shape so any structured
+    // decoded value (tuples/structs, arrays of structs, nested combinations)
+    // renders recursively and never collapses to "[object Object]". ABI
+    // components are used only to add type names and field labels when known.
+    if (Array.isArray(value)) {
+      // Plain arrays of scalars keep the compact inline form.
+      if (!value.some(isStructured)) {
         return (
           <>
             {type} [
             {value.map((item, idx) => (
               <React.Fragment key={`${idx}:${safeJsonStringify(item)}`}>
-                {`\n${nextIndent}`}
-                {renderInlineDecodedArg(item, { ...input, type: "tuple" }, depth + 1)}
-                {idx < value.length - 1 ? "," : ""}
+                {idx > 0 ? ", " : ""}
+                {String(item)}
               </React.Fragment>
             ))}
-            {`\n${indent}`}]
+            ]
           </>
         );
       }
 
-      if (rawType === "tuple") {
-        return (
-          <>
-            {type} {"{"}
-            {input.components.map((component, idx) => (
-              <React.Fragment key={`${idx}:${component.name ?? ""}:${component.type ?? ""}`}>
-                {`\n${nextIndent}`}
-                {component.name ? `${component.name}: ` : ""}
-                {renderInlineDecodedArg(value[idx], component, depth + 1)}
-                {idx < input.components!.length - 1 ? "," : ""}
-              </React.Fragment>
-            ))}
-            {`\n${indent}`}
-            {"}"}
-          </>
-        );
-      }
-    }
-
-    if (Array.isArray(value)) {
+      const elementInput = isTuple && components ? { ...input, type: "tuple" } : undefined;
       return (
         <>
           {type} [
           {value.map((item, idx) => (
             <React.Fragment key={`${idx}:${safeJsonStringify(item)}`}>
-              {idx > 0 ? ", " : ""}
-              {String(item)}
+              {`\n${nextIndent}`}
+              {isStructured(item)
+                ? renderInlineDecodedArg(item, elementInput, depth + 1)
+                : String(item)}
+              {idx < value.length - 1 ? "," : ""}
             </React.Fragment>
           ))}
-          ]
+          {`\n${indent}`}]
+        </>
+      );
+    }
+
+    if (isJsonObject(value)) {
+      const fields = components
+        ? components.map((component, idx) => ({
+            key: component.name ?? String(idx),
+            label: component.name,
+            input: component,
+          }))
+        : Object.keys(value).map((key) => ({ key, label: key, input: undefined }));
+
+      return (
+        <>
+          {type} {"{"}
+          {fields.map((field, idx) => (
+            <React.Fragment key={`${idx}:${field.key}`}>
+              {`\n${nextIndent}`}
+              {field.label ? `${field.label}: ` : ""}
+              {renderInlineDecodedArg(value[field.key], field.input, depth + 1)}
+              {idx < fields.length - 1 ? "," : ""}
+            </React.Fragment>
+          ))}
+          {`\n${indent}`}
+          {"}"}
         </>
       );
     }
