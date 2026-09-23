@@ -1705,7 +1705,7 @@ function App() {
           alt=""
           width={16}
           height={16}
-          style={{ display: "inline-block", marginRight: "0.25rem", verticalAlign: "-0.15em" }}
+          style={{ display: "inline-block", verticalAlign: "-0.15em" }}
         />
         <button
           type="button"
