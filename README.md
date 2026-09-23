@@ -155,7 +155,7 @@ Records expire after 7 days.
 - For `eth_sendTransaction`, use `{ to, data?, value? }`; `from` may be omitted.
 - For `personal_sign`, use `{ message }` or `{ data }`; `address` may be omitted.
 - For `eth_signTypedData_v4`, use `{ typedData }` or `{ data }`; `address` may be omitted.
-- For `wallet_sendCalls`, use `{ calls: [{ to, data, value? }, ...] }`; `from` may be omitted.
+- For `wallet_sendCalls`, use `{ calls: [{ to, data, value? }, ...] }`; `from` may be omitted. For account substitution, put `0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` (all `a`'s) wherever the connected account's address belongs — the top-level `from`, a call `to`, or an ABI-encoded address inside call `data` — and the app replaces every occurrence with the connected account's address. This lets an agent prepare contract calls before the user's address is known.
 - For `wallet_sign`, use `{ version: "1.0", request: { type, data } }` (e.g. `type: "0x45"` for personal-sign messages, `type: "0x01"` for typed data); `address` and `capabilities` may be omitted. For account substitution, set any address field to `0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` (all `a`'s) and the app replaces the occurrence with the connected account's address. If the wallet doesn't implement `wallet_sign` (ERC-7871), the app falls back to the equivalent classic method signed by the connected account: `personal_sign` for `0x45` or `eth_signTypedData_v4` for `0x01`, and wraps the returned signature plus the signed message as `{ signature, message, account }`.
 
 ## Local Dev

@@ -249,29 +249,43 @@ type WalletSignCall = {
 };
 
 // Address sentinel that signals "substitute the connected account's address"
-// for a wallet_sign request that omits a concrete account up front.
-const WALLET_SIGN_SUBSTITUTE_ACCOUNT = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+// for a request that omits a concrete account up front. It lets an agent prepare
+// a request (including ABI-encoded calldata) before the user's address is known.
+const SUBSTITUTE_ACCOUNT = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+// When the sentinel is embedded in hex calldata it is the bare 20 address bytes
+// with no `0x` prefix, so embedded-aware methods also look for this value.
+const SUBSTITUTE_ACCOUNT_HEX = SUBSTITUTE_ACCOUNT.slice(2);
 
-function isWalletSignSubstituteAddress(address: string | undefined) {
-  return typeof address === "string" && address.toLowerCase() === WALLET_SIGN_SUBSTITUTE_ACCOUNT;
+// Methods whose params may carry the sentinel.
+const SENTINEL_SUBSTITUTION_METHODS = new Set(["wallet_sign", "wallet_sendCalls"]);
+// Methods whose params embed the sentinel inside hex calldata, where it appears as
+// the bare 20 address bytes with no `0x` prefix.
+const SENTINEL_EMBEDDED_METHODS = new Set(["wallet_sendCalls"]);
+
+function isSubstituteAddress(address: string | undefined) {
+  return typeof address === "string" && address.toLowerCase() === SUBSTITUTE_ACCOUNT;
 }
 
-// True when any string leaf in the value equals the substitution sentinel.
-function hasWalletSignSentinel(value: unknown): boolean {
-  if (typeof value === "string") return value.toLowerCase() === WALLET_SIGN_SUBSTITUTE_ACCOUNT;
-  if (Array.isArray(value)) return value.some((item) => hasWalletSignSentinel(item));
-  if (isJsonObject(value)) return Object.values(value).some((item) => hasWalletSignSentinel(item));
-  return false;
+// The pattern to match for a value: the `0x`-prefixed address, or (when the value
+// may embed it in hex calldata) the bare 20-byte form.
+function substituteSentinelPattern(embedded: boolean) {
+  return embedded ? SUBSTITUTE_ACCOUNT_HEX : SUBSTITUTE_ACCOUNT;
+}
+
+// True when the sentinel appears anywhere in the value, including embedded within
+// a longer string such as hex calldata.
+function hasSubstituteSentinel(value: unknown, embedded = false): boolean {
+  return (JSON.stringify(value) ?? "").toLowerCase().includes(substituteSentinelPattern(embedded));
 }
 
 // Deep-replace every sentinel occurrence anywhere in the request value by doing a
 // case-insensitive string substitution on the JSON round-trip (matching Coinbase Keys).
-function replaceSentinelLeaves(value: unknown, replacement: string): unknown {
-  const sentinelRe = new RegExp(
-    WALLET_SIGN_SUBSTITUTE_ACCOUNT.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-    "gi",
-  );
-  const text = JSON.stringify(value).replace(sentinelRe, replacement);
+function replaceSubstituteSentinel(value: unknown, replacement: string, embedded = false): unknown {
+  const pattern = substituteSentinelPattern(embedded);
+  const sentinelRe = new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+  // Embedded occurrences keep any surrounding `0x`, so substitute the bare bytes.
+  const replacementValue = embedded ? replacement.replace(/^0x/i, "") : replacement;
+  const text = JSON.stringify(value).replace(sentinelRe, replacementValue);
   return JSON.parse(text) as unknown;
 }
 
@@ -338,7 +352,7 @@ function buildWalletSignFallback(
   connectedAddress: string | undefined,
 ): { method: "personal_sign" | "eth_signTypedData_v4"; params: unknown[] } | null {
   if (call.type !== "0x45" && call.type !== "0x01") return null;
-  const address = isWalletSignSubstituteAddress(call.address)
+  const address = isSubstituteAddress(call.address)
     ? connectedAddress
     : (call.address ?? connectedAddress);
   if (!address) return null;
@@ -535,8 +549,21 @@ function buildRpcParams(
     };
   }
 
-  // Let advanced callers pass the exact JSON-RPC params array.
+  // Let advanced callers pass the exact JSON-RPC params array, except for the
+  // account sentinel which is substituted even there so prepared calldata can be
+  // reused across accounts.
   if (Array.isArray(rawParams)) {
+    const embedded = SENTINEL_EMBEDDED_METHODS.has(method);
+    if (
+      fallbackAddress &&
+      SENTINEL_SUBSTITUTION_METHODS.has(method) &&
+      hasSubstituteSentinel(rawParams, embedded)
+    ) {
+      return {
+        ok: true,
+        params: replaceSubstituteSentinel(rawParams, fallbackAddress, embedded) as unknown[],
+      };
+    }
     return { ok: true, params: rawParams };
   }
 
@@ -557,7 +584,15 @@ function buildRpcParams(
   }
 
   if (method === "wallet_sendCalls") {
-    const calls = { ...rawParams };
+    // The sentinel may appear in the top-level `from`, a call target, or inside
+    // ABI-encoded calldata; replace every occurrence with the connected account.
+    // Without a connected account the request is left untouched (execution is
+    // gated on connection, so the wallet always gets a real address).
+    const substituted =
+      fallbackAddress && hasSubstituteSentinel(rawParams, true)
+        ? (replaceSubstituteSentinel(rawParams, fallbackAddress, true) as JsonObject)
+        : rawParams;
+    const calls = { ...substituted };
     const from = (calls.from as string | undefined) ?? fallbackAddress;
     // wallet_sendCalls requires `version`, `from`, and `chainId`; fill them when
     // not present from defaults / connected account / requested chain.
@@ -616,11 +651,11 @@ function buildRpcParams(
   }
 
   if (method === "wallet_sign" && isJsonObject(rawParams)) {
-    if (fallbackAddress && hasWalletSignSentinel(rawParams)) {
+    if (fallbackAddress && hasSubstituteSentinel(rawParams)) {
       // 0xaaaa…aa sentinel: substitute the connected account's address anywhere
       // it appears. Without a connected account the request is left untouched
       // (execution is gated on connection, so the wallet always gets a real one).
-      return { ok: true, params: [replaceSentinelLeaves(rawParams, fallbackAddress)] };
+      return { ok: true, params: [replaceSubstituteSentinel(rawParams, fallbackAddress)] };
     }
     return { ok: true, params: [rawParams] };
   }
