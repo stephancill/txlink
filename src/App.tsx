@@ -22,6 +22,7 @@ import {
   decodeFunctionData,
   erc20Abi,
   type Hex,
+  formatUnits,
   hexToString,
   http,
   isAddress,
@@ -1756,6 +1757,22 @@ function App() {
     return safeJsonStringify(value, 2);
   }
 
+  function renderTransactionValue(value: unknown) {
+    const amount = parseOptionalBigInt(value);
+    if (amount == null || amount < 0n || !chainInfo) return renderRpcPrimitiveValue(value);
+
+    const { decimals = 18, symbol = chainInfo.shortName.toUpperCase() } =
+      chainInfo.nativeCurrency ?? {};
+    return (
+      <>
+        {formatUnits(amount, decimals)} {symbol}
+        {typeof value === "string" && value.startsWith("0x") && (
+          <span className="text-gray-500"> ({value})</span>
+        )}
+      </>
+    );
+  }
+
   function renderTransactionParameters(tx: Record<string, unknown>) {
     const entries = [
       ["From", tx.from],
@@ -1770,6 +1787,8 @@ function App() {
           <SectionRow key={label} label={label}>
             {label === "Data" && typeof value === "string" ? (
               <ExpandableCalldata value={value} />
+            ) : label === "Value" ? (
+              renderTransactionValue(value)
             ) : (
               renderRpcPrimitiveValue(value)
             )}
@@ -2261,7 +2280,16 @@ function App() {
           {renderPreviewModeControl()}
         </div>
         {requestPreviewMode === "decoded" && hasSuccessfulDecoding ? (
-          renderDecodedParameters()
+          <div className="space-y-3">
+            {method === "eth_sendTransaction" && isJsonObject(rpcParams?.[0]) && (
+              <SectionList>
+                <SectionRow label="Value">
+                  {renderTransactionValue(rpcParams[0].value ?? "0x0")}
+                </SectionRow>
+              </SectionList>
+            )}
+            {renderDecodedParameters()}
+          </div>
         ) : structuredParameters ? (
           structuredParameters
         ) : (
