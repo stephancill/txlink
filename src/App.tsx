@@ -2404,7 +2404,7 @@ function App() {
           </section>
         )}
 
-        {hasRequestQuery && (
+        {hasRequestQuery && result == null && (
           <section className="space-y-3">
             <div className="space-y-1">
               <h2>Request</h2>
