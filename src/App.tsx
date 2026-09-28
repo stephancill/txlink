@@ -1763,14 +1763,7 @@ function App() {
 
     const { decimals = 18, symbol = chainInfo.shortName.toUpperCase() } =
       chainInfo.nativeCurrency ?? {};
-    return (
-      <>
-        {formatUnits(amount, decimals)} {symbol}
-        {typeof value === "string" && value.startsWith("0x") && (
-          <span className="text-gray-500"> ({value})</span>
-        )}
-      </>
-    );
+    return `${formatUnits(amount, decimals)} ${symbol}`;
   }
 
   function renderTransactionParameters(tx: Record<string, unknown>) {
